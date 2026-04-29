@@ -1,0 +1,1414 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simulação de Tráfego - Cubatão</title>
+  <script src="https://unpkg.com/deck.gl@8.9.35/dist.min.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet"/>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{background:#000;color:#fff;font-family:'Segoe UI',sans-serif;overflow:hidden}
+    #map{width:100vw;height:100vh}
+
+    /* === START OVERLAY === */
+    .start-overlay{
+      position:fixed;inset:0;z-index:999;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      background:radial-gradient(ellipse at 50% 60%,rgba(10,10,18,0.75),rgba(0,0,0,0.92));
+      backdrop-filter:blur(6px);
+      transition:opacity 0.8s ease,visibility 0.8s ease;
+    }
+    .start-overlay.hidden{opacity:0;visibility:hidden;pointer-events:none}
+    .start-title{
+      font-size:1.1rem;font-weight:300;color:rgba(255,255,255,0.5);
+      letter-spacing:3px;text-transform:uppercase;margin-bottom:0.6rem;
+      animation:startPulseText 2.5s ease-in-out infinite;
+    }
+    .start-subtitle{
+      font-size:0.7rem;color:rgba(255,255,255,0.2);letter-spacing:1px;margin-bottom:2.5rem;
+    }
+    .start-btn{
+      position:relative;border:none;cursor:pointer;
+      background:linear-gradient(135deg,#FF6B00,#FF0050);
+      color:#fff;font-size:0.95rem;font-weight:700;letter-spacing:1px;
+      padding:1rem 2.8rem;border-radius:50px;
+      box-shadow:0 0 40px rgba(255,107,0,0.25),0 4px 20px rgba(0,0,0,0.4);
+      transition:transform 0.3s ease,box-shadow 0.3s ease;
+      overflow:hidden;
+    }
+    .start-btn:hover{
+      transform:scale(1.05);
+      box-shadow:0 0 60px rgba(255,107,0,0.4),0 6px 30px rgba(0,0,0,0.5);
+    }
+    .start-btn:active{transform:scale(0.97)}
+    .start-btn::before{
+      content:'';position:absolute;inset:-2px;border-radius:52px;
+      background:linear-gradient(135deg,#FF6B00,#FF0050,#FF6B00);
+      background-size:200% 200%;z-index:-1;
+      animation:startGlow 3s ease infinite;
+      filter:blur(12px);opacity:0.5;
+    }
+    @keyframes startGlow{
+      0%,100%{background-position:0% 50%}
+      50%{background-position:100% 50%}
+    }
+    @keyframes startPulseText{
+      0%,100%{opacity:0.5}
+      50%{opacity:1}
+    }
+
+    /* === SIM HIDDEN STATE (before start) === */
+    .sim-hidden .panel,.sim-hidden .sc-panel,.sim-hidden .ctrl,
+    .sim-hidden .time-display,.sim-hidden .panel-toggle,
+    .sim-hidden .compass-wrap,.sim-hidden .nav-ctrl,.sim-hidden .minimap-wrap,
+    .sim-hidden .map-style-ctrl{
+      opacity:0 !important;pointer-events:none !important;
+      transform:translateY(18px);
+    }
+
+    /* === SIM ENTER ANIMATIONS === */
+    @keyframes simSlideUp{
+      from{opacity:0;transform:translateY(24px)}
+      to{opacity:1;transform:translateY(0)}
+    }
+    @keyframes simSlideLeft{
+      from{opacity:0;transform:translateX(-24px)}
+      to{opacity:1;transform:translateX(0)}
+    }
+    @keyframes simSlideRight{
+      from{opacity:0;transform:translateX(24px)}
+      to{opacity:1;transform:translateX(0)}
+    }
+    @keyframes simFadeScale{
+      from{opacity:0;transform:scale(0.92)}
+      to{opacity:1;transform:scale(1)}
+    }
+    .sim-enter-up{animation:simSlideUp 0.7s cubic-bezier(0.16,1,0.3,1) both}
+    .sim-enter-left{animation:simSlideLeft 0.7s cubic-bezier(0.16,1,0.3,1) both}
+    .sim-enter-right{animation:simSlideRight 0.7s cubic-bezier(0.16,1,0.3,1) both}
+    .sim-enter-scale{animation:simFadeScale 0.6s cubic-bezier(0.16,1,0.3,1) both}
+    .panel{
+      position:fixed;top:1rem;right:1rem;z-index:10;
+      background:linear-gradient(165deg,rgba(18,18,24,0.92),rgba(10,10,14,0.95));
+      backdrop-filter:blur(20px);
+      border:1px solid rgba(255,255,255,0.08);border-radius:16px;
+      padding:0;width:240px;transition:none;
+      box-shadow:0 8px 32px rgba(0,0,0,0.5);
+    }
+    .panel-header{
+      display:flex;align-items:center;justify-content:space-between;
+      padding:0.65rem 1rem;cursor:grab;user-select:none;
+      border-bottom:1px solid rgba(255,255,255,0.06);
+    }
+    .panel-header:active{cursor:grabbing}
+    .panel h2{font-size:0.7rem;margin:0;color:rgba(255,255,255,0.45);font-weight:600;letter-spacing:1.5px;text-transform:uppercase}
+    .panel-collapse-btn{
+      background:none;border:none;color:rgba(255,255,255,0.2);font-size:0.8rem;
+      cursor:pointer;padding:0 4px;transition:all 0.2s;
+    }
+    .panel-collapse-btn:hover{color:rgba(255,255,255,0.6)}
+    .panel.collapsed .panel-collapse-btn{transform:rotate(180deg)}
+    .panel-body{padding:0.6rem 0.9rem 0.8rem;overflow:hidden;max-height:650px;transition:max-height 0.3s ease,padding 0.3s ease}
+    .panel.collapsed .panel-body{max-height:0;padding-top:0;padding-bottom:0}
+    .ctrl-row{display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0;font-size:0.72rem}
+    .ctrl-row label{color:rgba(255,255,255,0.35);width:52px;flex-shrink:0;font-size:0.65rem;font-weight:500}
+    .ctrl-row input[type=range]{flex:1;accent-color:#FF6B00;height:3px;min-width:0}
+    .ctrl-val{width:42px;flex-shrink:0;text-align:right;font-weight:700;font-size:0.72rem;color:rgba(255,255,255,0.7)}
+    .ctrl{
+      position:fixed;bottom:1.5rem;left:0;right:0;margin:0 auto;width:fit-content;z-index:10;
+      display:flex;gap:0.5rem;align-items:center;
+      background:linear-gradient(165deg,rgba(18,18,24,0.92),rgba(10,10,14,0.95));
+      backdrop-filter:blur(20px);
+      border:1px solid rgba(255,255,255,0.08);border-radius:40px;
+      padding:0.4rem 1.2rem;
+      box-shadow:0 8px 32px rgba(0,0,0,0.5);
+    }
+    .ctrl button{
+      padding:0.4rem 0.9rem;border:none;border-radius:30px;
+      color:#fff;font-weight:600;font-size:0.72rem;cursor:pointer;
+      transition:all 0.2s ease;
+    }
+    .ctrl button:hover{transform:scale(1.04)}
+    .ctrl button:active{transform:scale(0.96)}
+    .ctrl button.pri{background:linear-gradient(135deg,#FF6B00,#FF0050)}
+    .ctrl button.sec{background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.6)}
+    .stat-divider{margin:0.5rem 0;border:none;border-top:1px solid rgba(255,255,255,0.05)}
+    .stat{display:flex;justify-content:space-between;padding:0.2rem 0;font-size:0.68rem}
+    .stat-l{color:rgba(255,255,255,0.3)}
+    .stat-v{font-weight:700;font-variant-numeric:tabular-nums;color:rgba(255,255,255,0.7)}
+    .stat-v.green{color:#4CAF50}
+    .stat-v.red{color:#F44336}
+    .pista-label{font-size:0.6rem;color:rgba(255,255,255,0.2);margin-bottom:0.2rem;text-transform:uppercase;letter-spacing:1px;font-weight:600}
+    .pista-list{list-style:none;padding:0;margin:0}
+    .pista-item{
+      display:flex;align-items:center;gap:0.5rem;
+      padding:0.3rem 0.5rem;margin:0.1rem 0;
+      border-radius:8px;font-size:0.68rem;color:rgba(255,255,255,0.45);
+    }
+    .pista-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+    .pista-lanes{font-size:0.58rem;color:rgba(255,255,255,0.2);margin-left:auto}
+    .time-display{
+      position:fixed;bottom:4.5rem;left:0;right:0;margin:0 auto;width:fit-content;z-index:10;
+      background:linear-gradient(165deg,rgba(18,18,24,0.88),rgba(10,10,14,0.92));
+      backdrop-filter:blur(12px);
+      border:1px solid rgba(255,255,255,0.06);border-radius:10px;
+      padding:0.3rem 1rem;font-size:0.75rem;font-weight:600;
+      font-variant-numeric:tabular-nums;color:rgba(255,255,255,0.5);
+      letter-spacing:1px;
+    }
+    .minimap-wrap{
+      position:fixed;bottom:3.5rem;right:1rem;z-index:10;
+      display:flex;flex-direction:column;gap:4px;align-items:flex-end;
+    }
+    .minimap-box{
+      width:160px;height:110px;border-radius:10px;overflow:hidden;
+      border:1px solid rgba(255,255,255,0.08);
+      box-shadow:0 4px 20px rgba(0,0,0,0.5);position:relative;
+    }
+    #minimap{width:100%;height:100%}
+    .minimap-box .maplibregl-canvas{border-radius:10px}
+    .minimap-box .maplibregl-ctrl-bottom-left,
+    .minimap-box .maplibregl-ctrl-bottom-right,
+    .minimap-box .maplibregl-ctrl-top-left,
+    .minimap-box .maplibregl-ctrl-top-right{display:none}
+    #minimap-rect{
+      position:absolute;border:2px solid #FF6B00;border-radius:2px;
+      background:rgba(255,107,0,0.08);pointer-events:none;z-index:2;
+      transition:all 0.15s ease-out;
+    }
+    .map-style-ctrl{
+      display:flex;gap:2px;
+      background:linear-gradient(165deg,rgba(18,18,24,0.88),rgba(10,10,14,0.92));
+      backdrop-filter:blur(16px);
+      border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:3px;
+    }
+    .style-btn{
+      width:30px;height:30px;border:1px solid transparent;border-radius:7px;
+      background:rgba(255,255,255,0.04);color:rgba(255,255,255,0.35);font-size:0.55rem;font-weight:700;
+      cursor:pointer;display:flex;align-items:center;justify-content:center;
+      transition:all 0.2s;letter-spacing:0.3px;text-transform:uppercase;
+    }
+    .style-btn:hover{background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.7)}
+    .style-btn.active{border-color:rgba(255,255,255,0.2);color:#fff;background:rgba(255,255,255,0.1)}
+    .nav-ctrl{
+      position:fixed;top:1rem;left:0;right:0;margin:0 auto;width:fit-content;z-index:10;
+      display:flex;gap:4px;align-items:center;
+      background:linear-gradient(165deg,rgba(18,18,24,0.88),rgba(10,10,14,0.92));
+      backdrop-filter:blur(20px);
+      border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:4px 8px;
+      box-shadow:0 4px 20px rgba(0,0,0,0.4);
+    }
+    .nav-group{display:flex;align-items:center;gap:1px;background:rgba(255,255,255,0.03);border-radius:8px;padding:2px}
+    .nav-btn{
+      width:28px;height:28px;border:none;border-radius:7px;
+      background:transparent;color:rgba(255,255,255,0.35);
+      font-size:0.75rem;font-weight:600;cursor:pointer;
+      display:flex;align-items:center;justify-content:center;
+      transition:all 0.2s ease;position:relative;
+    }
+    .nav-btn:hover{background:rgba(255,255,255,0.1);color:#fff}
+    .nav-btn:active{background:rgba(255,107,0,0.25);color:#FF6B00;transform:scale(0.9)}
+    .nav-btn.rotating{background:rgba(255,107,0,0.3);color:#FF6B00;box-shadow:0 0 8px rgba(255,107,0,0.5)}
+    .compass-wrap{position:fixed;top:50%;left:1rem;transform:translateY(-50%);z-index:10}
+    .compass-btn{
+      width:56px;height:56px;padding:0;
+      border:2px solid rgba(255,107,0,0.5);border-radius:50%;
+      background:rgba(0,0,0,0.85);backdrop-filter:blur(16px);cursor:pointer;
+      display:flex;align-items:center;justify-content:center;
+      transition:all 0.2s ease;position:relative;
+      box-shadow:0 0 16px rgba(255,107,0,0.25),0 4px 16px rgba(0,0,0,0.5);
+    }
+    .compass-btn:hover{background:rgba(255,107,0,0.15);border-color:#FF6B00;box-shadow:0 0 24px rgba(255,107,0,0.4)}
+    .compass-btn svg{width:44px;height:44px;transition:transform 0.3s ease}
+    .compass-overlay{
+      display:none;position:fixed;top:0;left:0;width:100%;height:100%;
+      z-index:99;background:rgba(0,0,0,0.5);
+    }
+    .compass-overlay.show{display:block}
+    .compass-expanded{
+      display:none;position:fixed;z-index:100;
+      width:260px;height:260px;top:50%;left:50%;
+      transform:translate(-50%,-50%);border-radius:50%;
+      background:rgba(0,0,0,0.92);backdrop-filter:blur(24px);
+      border:2.5px solid #FF6B00;
+      box-shadow:0 0 50px rgba(255,107,0,0.3),0 0 100px rgba(255,107,0,0.1),0 8px 32px rgba(0,0,0,0.7);
+      cursor:default;
+    }
+    .compass-expanded.show{display:flex;align-items:center;justify-content:center;animation:compassIn 0.3s ease forwards}
+    @keyframes compassIn{from{transform:translate(-50%,-50%) scale(0.3);opacity:0}to{transform:translate(-50%,-50%) scale(1);opacity:1}}
+    .compass-expanded svg{width:220px;height:220px}
+    .compass-dir{
+      position:absolute;cursor:pointer;font-weight:900;font-family:'Segoe UI',sans-serif;
+      transition:all 0.2s;text-shadow:0 0 10px rgba(0,0,0,0.9),0 0 20px rgba(0,0,0,0.5);letter-spacing:1px;
+    }
+    .compass-dir:hover{filter:brightness(1.4)}
+    .compass-dir.dir-n{top:-18px;left:50%;transform:translateX(-50%);color:#FF6B00;font-size:1.5rem;text-shadow:0 0 12px rgba(255,107,0,0.6)}
+    .compass-dir.dir-n:hover{transform:translateX(-50%) scale(1.2)}
+    .compass-dir.dir-s{bottom:-18px;left:50%;transform:translateX(-50%);color:#ccc;font-size:1.2rem}
+    .compass-dir.dir-s:hover{transform:translateX(-50%) scale(1.2);color:#fff}
+    .compass-dir.dir-l{right:-18px;top:50%;transform:translateY(-50%);color:#ccc;font-size:1.2rem}
+    .compass-dir.dir-l:hover{transform:translateY(-50%) scale(1.2);color:#fff}
+    .compass-dir.dir-o{left:-22px;top:50%;transform:translateY(-50%);color:#ccc;font-size:1.2rem}
+    .compass-dir.dir-o:hover{transform:translateY(-50%) scale(1.2);color:#fff}
+    .nav-btn svg{width:16px;height:16px;fill:currentColor}
+    .ctrl button.saved{background:rgba(76,175,80,0.2)!important;color:#4CAF50!important}
+    .panel-toggle{
+      display:none;position:fixed;top:1rem;right:1rem;z-index:11;
+      width:40px;height:40px;border:none;border-radius:12px;
+      background:rgba(0,0,0,0.82);backdrop-filter:blur(16px);
+      border:1px solid rgba(255,255,255,0.06);
+      color:#FF6B00;font-size:1.2rem;cursor:pointer;
+      align-items:center;justify-content:center;
+    }
+    .cong-bar{height:2px;border-radius:1px;margin-top:3px;transition:all 0.5s;opacity:0.8}
+    .route-tooltip{
+      position:fixed;z-index:50;pointer-events:none;
+      background:rgba(10,10,14,0.92);backdrop-filter:blur(12px);
+      border:1px solid rgba(255,255,255,0.12);border-radius:10px;
+      padding:0.5rem 0.75rem;display:none;
+      box-shadow:0 4px 20px rgba(0,0,0,0.5);
+      max-width:220px;
+    }
+    .route-tooltip.visible{display:block}
+    .route-tooltip-name{font-size:0.75rem;font-weight:700;color:#fff;margin-bottom:3px}
+    .route-tooltip-info{font-size:0.6rem;color:rgba(255,255,255,0.5);line-height:1.4}
+    .route-tooltip-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
+    .sc-panel{
+      position:fixed;top:4rem;left:1rem;z-index:10;
+      background:linear-gradient(165deg,rgba(18,18,24,0.92),rgba(10,10,14,0.95));
+      backdrop-filter:blur(20px);
+      border:1px solid rgba(255,255,255,0.08);border-radius:18px;
+      padding:0;width:230px;
+      box-shadow:0 8px 32px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.03) inset;
+    }
+    .sc-panel-header{
+      padding:0.85rem 1.1rem 0.65rem;border-bottom:1px solid rgba(255,255,255,0.06);
+      display:flex;align-items:center;gap:0.5rem;
+    }
+    .sc-panel-header h3{
+      font-size:0.7rem;margin:0;color:rgba(255,255,255,0.45);font-weight:600;
+      letter-spacing:1.5px;text-transform:uppercase;
+    }
+    .sc-panel-body{padding:0.5rem 0.6rem 0.7rem}
+    .sc-card{
+      display:flex;align-items:center;gap:0.7rem;
+      padding:0.7rem 0.8rem;margin:0.2rem 0;position:relative;
+      border:1px solid transparent;border-radius:12px;
+      background:transparent;
+      cursor:pointer;transition:all 0.3s ease;overflow:hidden;
+    }
+    .sc-card::before{
+      content:'';position:absolute;inset:0;border-radius:12px;opacity:0;
+      transition:opacity 0.3s ease;pointer-events:none;
+    }
+    .sc-card:hover{background:rgba(255,255,255,0.04)}
+    .sc-card.active{border-color:rgba(0,200,83,0.35);background:rgba(0,200,83,0.06)}
+    .sc-card.active::before{opacity:1;background:linear-gradient(135deg,rgba(0,200,83,0.08),transparent 60%)}
+    .sc-card.active[data-sc="1"]{border-color:rgba(255,140,0,0.35);background:rgba(255,140,0,0.06)}
+    .sc-card.active[data-sc="1"]::before{opacity:1;background:linear-gradient(135deg,rgba(255,140,0,0.08),transparent 60%)}
+    .sc-card.active[data-sc="2"]{border-color:rgba(0,140,255,0.35);background:rgba(0,140,255,0.06)}
+    .sc-card.active[data-sc="2"]::before{opacity:1;background:linear-gradient(135deg,rgba(0,140,255,0.08),transparent 60%)}
+    .sc-card-num{
+      width:30px;height:30px;border-radius:10px;flex-shrink:0;
+      display:flex;align-items:center;justify-content:center;
+      background:rgba(255,255,255,0.05);
+      font-size:0.7rem;font-weight:800;color:rgba(255,255,255,0.25);
+      transition:all 0.3s ease;
+    }
+    .sc-card.active .sc-card-num{background:#00C853;color:#000;box-shadow:0 2px 12px rgba(0,200,83,0.35)}
+    .sc-card.active[data-sc="1"] .sc-card-num{background:#FF8C00;color:#000;box-shadow:0 2px 12px rgba(255,140,0,0.35)}
+    .sc-card.active[data-sc="2"] .sc-card-num{background:#008CFF;color:#fff;box-shadow:0 2px 12px rgba(0,140,255,0.35)}
+    .sc-card-info{display:flex;flex-direction:column;gap:2px;min-width:0}
+    .sc-card-title{font-size:0.78rem;font-weight:600;color:rgba(255,255,255,0.4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color 0.3s}
+    .sc-card.active .sc-card-title{color:#fff}
+    .sc-card-sub{font-size:0.6rem;color:rgba(255,255,255,0.2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color 0.3s}
+    .sc-card.active .sc-card-sub{color:rgba(255,255,255,0.5)}
+    .sc-card-arrow{margin-left:auto;opacity:0;transform:translateX(-4px);transition:all 0.3s ease;color:rgba(255,255,255,0.3);font-size:0.7rem}
+    .sc-card.active .sc-card-arrow{opacity:1;transform:translateX(0)}
+    @media(max-width:768px){
+      .panel-toggle{display:flex}
+      .panel{
+        top:auto !important;bottom:0;right:0 !important;left:0 !important;
+        border-radius:20px 20px 0 0;min-width:unset;width:100%;
+        transform:translateY(100%);transition:transform 0.3s ease;
+      }
+      .panel.open{transform:translateY(0)}
+      .panel-header{cursor:default}
+      .panel h2{font-size:0.9rem}
+      .panel-body{padding:0.6rem 1rem 1rem;max-height:45vh;overflow-y:auto}
+      .nav-ctrl{top:0.6rem;bottom:auto;left:0;right:0;margin:0 auto;padding:5px 8px;gap:4px}
+      .nav-group{padding:2px;gap:1px}
+      .nav-btn{width:28px;height:28px}
+      .nav-btn svg{width:14px;height:14px}
+      .compass-wrap{display:none}
+      .ctrl-row{font-size:0.72rem;gap:0.3rem;padding:0.3rem 0}
+      .ctrl-row label{width:48px;font-size:0.62rem}
+      .ctrl-val{width:40px;font-size:0.68rem}
+      .stat{font-size:0.72rem}
+      .pista-item{font-size:0.72rem;padding:0.35rem 0.5rem}
+      .minimap-wrap{bottom:4.5rem;top:auto;right:0.5rem}
+      .minimap-box{width:110px;height:80px;border-radius:8px}
+      .map-style-ctrl{padding:3px;gap:2px}
+      .style-btn{width:26px;height:26px;font-size:0.5rem;border-radius:6px}
+      .ctrl{bottom:0.8rem;left:0;right:0;margin:0 auto;padding:0.4rem 1rem;gap:0.5rem;border-radius:30px}
+      .ctrl button{padding:0.35rem 0.8rem;font-size:0.7rem}
+      .time-display{bottom:3.5rem;left:0;right:0;margin:0 auto;padding:0.3rem 0.8rem;font-size:0.75rem;border-radius:10px}
+      .panel-toggle{top:0.6rem;right:0.5rem}
+      .sc-panel{top:auto;bottom:5rem;left:0.5rem;width:190px}
+      .sc-card{padding:0.5rem 0.6rem;gap:0.5rem}
+      .sc-card-num{width:24px;height:24px;font-size:0.6rem;border-radius:8px}
+      .sc-card-title{font-size:0.68rem}
+      .sc-card-sub{font-size:0.55rem}
+      .sc-card-arrow{display:none}
+    }
+    @media(max-width:400px){
+      .minimap-wrap{display:none}
+      .panel{max-height:50vh;padding:0.8rem 1rem}
+      .ctrl-row label{width:42px;font-size:0.58rem}
+      .ctrl-val{width:36px;font-size:0.62rem}
+      .nav-ctrl{padding:4px 6px;gap:3px}
+      .nav-btn{width:24px;height:24px}
+      .nav-btn svg{width:12px;height:12px}
+    }
+  </style>
+</head>
+<body class="sim-hidden">
+
+<div class="start-overlay" id="startOverlay">
+  <div class="start-title">Simulacao de Trafego</div>
+  <div class="start-subtitle">Cubatao &mdash; Santos</div>
+  <button class="start-btn" id="startBtn">INICIAR</button>
+</div>
+
+<div id="map"></div>
+
+<div class="route-tooltip" id="routeTooltip"></div>
+<div class="sc-panel" id="scPanel">
+  <div class="sc-panel-header"><h3>Cenarios</h3></div>
+  <div class="sc-panel-body">
+    <div class="sc-card active" data-sc="0">
+      <span class="sc-card-num">1</span>
+      <div class="sc-card-info">
+        <span class="sc-card-title">Cenario Atual</span>
+        <span class="sc-card-sub">Conego sem obras</span>
+      </div>
+      <span class="sc-card-arrow">&#9654;</span>
+    </div>
+    <div class="sc-card" data-sc="1">
+      <span class="sc-card-num">2</span>
+      <div class="sc-card-info">
+        <span class="sc-card-title">3a Pista SEM COPI</span>
+        <span class="sc-card-sub">Colapso na Conego</span>
+      </div>
+      <span class="sc-card-arrow">&#9654;</span>
+    </div>
+    <div class="sc-card" data-sc="2">
+      <span class="sc-card-num">3</span>
+      <div class="sc-card-info">
+        <span class="sc-card-title">3a Pista COM COPI</span>
+        <span class="sc-card-sub">Fluxo livre</span>
+      </div>
+      <span class="sc-card-arrow">&#9654;</span>
+    </div>
+  </div>
+</div>
+
+<button class="panel-toggle" id="panelToggle" onclick="document.getElementById('ctrlPanel').classList.toggle('open');this.textContent=document.getElementById('ctrlPanel').classList.contains('open')?'\u2715':'\u2630'">&#9776;</button>
+<div class="panel" id="ctrlPanel">
+  <div class="panel-header" id="panelDragHandle">
+    <h2>CONTROLES</h2>
+    <button class="panel-collapse-btn" id="collapseBtn" title="Recolher">&#9650;</button>
+  </div>
+  <div class="panel-body">
+  <div class="ctrl-row">
+    <label>Pista</label>
+    <input type="range" id="roadSlider" min="1" max="80" step="1" value="8">
+    <span class="ctrl-val" id="roadVal">8</span>
+  </div>
+  <div class="ctrl-row">
+    <label>Veloc.</label>
+    <input type="range" id="speedSlider2" min="10" max="120" step="1" value="55">
+    <span class="ctrl-val" id="speedVal">55 km/h</span>
+  </div>
+  <div class="ctrl-row">
+    <label>Ve&iacute;culos</label>
+    <input type="range" id="carSlider" min="5" max="100" step="5" value="100">
+    <span class="ctrl-val" id="carVal">100%</span>
+  </div>
+  <hr class="stat-divider">
+  <div class="stat"><span class="stat-l">Total veic./dia</span><span class="stat-v" id="statTotalDia">--</span></div>
+  <div class="stat"><span class="stat-l">Total veic./hora</span><span class="stat-v" id="statTotalHora">--</span></div>
+  <div class="stat"><span class="stat-l">Vel. media</span><span class="stat-v" id="statVelMedia">--</span></div>
+  <div class="stat"><span class="stat-l">Vel. pico</span><span class="stat-v" id="statVelPico">--</span></div>
+  <div class="stat"><span class="stat-l">Nivel HCM</span><span class="stat-v" id="statNivel">--</span></div>
+  <div class="stat"><span class="stat-l">Vol./Capacidade</span><span class="stat-v" id="statVC">--</span></div>
+  <div class="stat"><span class="stat-l">Congestionamento</span><span class="stat-v green" id="statCong">--</span></div>
+  <div class="cong-bar" id="congBar" style="background:linear-gradient(90deg,#4CAF50,#4CAF50);width:0%"></div>
+  <hr class="stat-divider">
+  <div class="pista-label">Rotas</div>
+  <ul class="pista-list" id="routeList"></ul>
+  </div>
+</div>
+
+<div class="time-display" id="clock">07:30:00</div>
+
+<div class="ctrl">
+  <button class="pri" id="btnPlay">&#9654; Play</button>
+  <button class="sec" onclick="resetSim()">&#8635; Reset</button>
+  <button class="sec" id="btnSave" onclick="salvarEstado()">&#128190; Salvar</button>
+</div>
+
+<div class="compass-wrap" id="compassWrap">
+  <button class="compass-btn" id="compassBtn" title="Abrir bussola" onclick="toggleCompass()">
+    <svg id="compassSvg" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="46" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="1.5"/>
+      <polygon points="50,8 56,42 50,38 44,42" fill="#FF6B00"/>
+      <polygon points="50,92 44,58 50,62 56,58" fill="rgba(255,255,255,0.35)"/>
+      <polygon points="92,50 58,44 62,50 58,56" fill="rgba(255,255,255,0.2)"/>
+      <polygon points="8,50 42,56 38,50 42,44" fill="rgba(255,255,255,0.2)"/>
+      <circle cx="50" cy="50" r="3" fill="#FF6B00" opacity="0.8"/>
+    </svg>
+  </button>
+</div>
+<div class="compass-overlay" id="compassOverlay" onclick="toggleCompass()"></div>
+<div class="compass-expanded" id="compassExpanded">
+  <svg id="compassSvgBig" viewBox="0 0 100 100">
+    <circle cx="50" cy="50" r="48" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="0.8"/>
+    <circle cx="50" cy="50" r="35" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="0.5"/>
+    <polygon points="50,6 57,40 50,35 43,40" fill="#FF6B00"/>
+    <polygon points="50,94 43,60 50,65 57,60" fill="rgba(255,255,255,0.35)"/>
+    <polygon points="94,50 60,43 65,50 60,57" fill="rgba(255,255,255,0.2)"/>
+    <polygon points="6,50 40,57 35,50 40,43" fill="rgba(255,255,255,0.2)"/>
+    <circle cx="50" cy="50" r="4" fill="#FF6B00" opacity="0.9"/>
+    <circle cx="50" cy="50" r="1.5" fill="#fff" opacity="0.8"/>
+  </svg>
+  <span class="compass-dir dir-n" onclick="rotateMap(0);toggleCompass()">N</span>
+  <span class="compass-dir dir-s" onclick="rotateMap(180);toggleCompass()">S</span>
+  <span class="compass-dir dir-l" onclick="rotateMap(90);toggleCompass()">L</span>
+  <span class="compass-dir dir-o" onclick="rotateMap(-90);toggleCompass()">O</span>
+</div>
+
+<div class="nav-ctrl" id="navCtrl">
+  <div class="nav-group">
+    <button class="nav-btn" id="rotLeftBtn" title="Girar esquerda" onclick="toggleAutoRotate(-1)">
+      <svg viewBox="0 0 24 24"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>
+    </button>
+    <button class="nav-btn" id="rotRightBtn" title="Girar direita" onclick="toggleAutoRotate(1)">
+      <svg viewBox="0 0 24 24"><path d="M11.5 8c2.65 0 5.05.99 6.9 2.6L22 7v9h-9l3.62-3.62C15.23 11.22 13.46 10.5 11.5 10.5c-3.54 0-6.55 2.31-7.6 5.5L1.53 15.22C2.92 11.03 6.85 8 11.5 8z"/></svg>
+    </button>
+  </div>
+  <div class="nav-group">
+    <button class="nav-btn" title="Inclinar mais" onclick="pitchMap(Math.min(85,curView.pitch+10))">
+      <svg viewBox="0 0 24 24"><path d="M7 14l5-5 5 5z"/></svg>
+    </button>
+    <button class="nav-btn" title="Inclinar menos" onclick="pitchMap(Math.max(0,curView.pitch-10))">
+      <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+    </button>
+  </div>
+  <div class="nav-group">
+    <button class="nav-btn" title="Zoom +" onclick="zoomMap(curView.zoom+0.5)">
+      <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+    </button>
+    <button class="nav-btn" title="Zoom -" onclick="zoomMap(curView.zoom-0.5)">
+      <svg viewBox="0 0 24 24"><path d="M19 13H5v-2h14v2z"/></svg>
+    </button>
+  </div>
+</div>
+
+<div class="minimap-wrap">
+  <div class="minimap-box">
+    <div id="minimap"></div>
+    <div id="minimap-rect"></div>
+  </div>
+  <div class="map-style-ctrl">
+    <button class="style-btn active" data-style="dark" title="Escuro">ESC</button>
+    <button class="style-btn" data-style="street" title="Rua">RUA</button>
+    <button class="style-btn" data-style="satellite" title="Satelite">SAT</button>
+    <button class="style-btn" data-style="hybrid" title="Hibrido">HIB</button>
+  </div>
+</div>
+
+<script>
+// ===== ROUTE DATA (from KML extractions) =====
+const ATUAL_FWD_RAW = [[-46.40818,-23.8541],[-46.40831,-23.85428],[-46.40822,-23.85464],[-46.40891,-23.85543],[-46.4099,-23.8565],[-46.4107,-23.85753],[-46.412,-23.85909],[-46.41367,-23.86121],[-46.41477,-23.86255],[-46.41595,-23.86398],[-46.417,-23.86528],[-46.41791,-23.86642],[-46.41865,-23.86736],[-46.41913,-23.86792],[-46.41964,-23.86856],[-46.42004,-23.86905],[-46.42084,-23.87006],[-46.42176,-23.8712],[-46.42364,-23.87358],[-46.42397,-23.87411],[-46.42432,-23.87485],[-46.42485,-23.87606],[-46.42519,-23.87678],[-46.42625,-23.87918],[-46.42634,-23.87936],[-46.42659,-23.87992],[-46.42754,-23.8821],[-46.42823,-23.88366],[-46.42855,-23.88431],[-46.42874,-23.88465],[-46.42934,-23.88534],[-46.4299,-23.88574],[-46.4306,-23.88607],[-46.43092,-23.88616],[-46.43194,-23.88638],[-46.43298,-23.88659],[-46.43361,-23.88672],[-46.43562,-23.88707],[-46.43724,-23.88736],[-46.43907,-23.88771],[-46.43937,-23.88777],[-46.43963,-23.88788],[-46.44004,-23.88816],[-46.44017,-23.8883],[-46.44025,-23.88839],[-46.44038,-23.88852],[-46.44096,-23.88907],[-46.441,-23.88912],[-46.44104,-23.88916],[-46.44115,-23.88929],[-46.44129,-23.88945],[-46.44143,-23.88961],[-46.4417,-23.89011],[-46.44175,-23.89049],[-46.44171,-23.89091],[-46.44151,-23.89143],[-46.44121,-23.89181],[-46.44094,-23.892],[-46.44035,-23.89226],[-46.43956,-23.89245],[-46.43762,-23.89288],[-46.43671,-23.89316],[-46.4361,-23.89344],[-46.43551,-23.89384],[-46.43513,-23.89426],[-46.43481,-23.89488],[-46.43473,-23.89527],[-46.4347,-23.89559],[-46.43474,-23.89602],[-46.43492,-23.89659],[-46.43527,-23.89715],[-46.43586,-23.89766],[-46.43645,-23.89798],[-46.43706,-23.89812],[-46.43755,-23.89815],[-46.43826,-23.8981],[-46.43888,-23.89799],[-46.44007,-23.89769],[-46.4407,-23.89753],[-46.44175,-23.89737],[-46.44246,-23.89738],[-46.44384,-23.89751],[-46.44424,-23.89755],[-46.44444,-23.89757],[-46.44623,-23.89775],[-46.44825,-23.89797],[-46.44921,-23.89815],[-46.44994,-23.89847],[-46.45063,-23.89883],[-46.45146,-23.89913],[-46.45176,-23.89923],[-46.4528,-23.8996],[-46.45329,-23.89981],[-46.45394,-23.90017],[-46.45439,-23.9005],[-46.45503,-23.90087],[-46.45614,-23.90142],[-46.45707,-23.9019],[-46.45788,-23.90216],[-46.45878,-23.90224],[-46.45973,-23.90233],[-46.46064,-23.90239],[-46.46251,-23.90219],[-46.46378,-23.90178],[-46.46536,-23.90092],[-46.46769,-23.89956],[-46.46883,-23.89903],[-46.46948,-23.89882],[-46.47009,-23.89867],[-46.47108,-23.89858],[-46.47187,-23.89858],[-46.47322,-23.89881],[-46.4748,-23.89926],[-46.47569,-23.89952],[-46.47699,-23.8999],[-46.47735,-23.89999],[-46.47853,-23.90019],[-46.47953,-23.90022],[-46.48013,-23.9002],[-46.48132,-23.90006],[-46.48235,-23.89993],[-46.4829,-23.89986],[-46.4844,-23.89968],[-46.48514,-23.89958],[-46.48606,-23.89946],[-46.48745,-23.89928],[-46.4892,-23.89906],[-46.48989,-23.89896],[-46.49067,-23.89874],[-46.49159,-23.89836],[-46.49231,-23.89789],[-46.49296,-23.89732],[-46.49362,-23.89655],[-46.49397,-23.89593],[-46.49434,-23.89496],[-46.4945,-23.89412],[-46.49452,-23.89359],[-46.49452,-23.89314],[-46.49449,-23.89197],[-46.4945,-23.89125],[-46.49454,-23.89018],[-46.4946,-23.88984],[-46.49477,-23.88931],[-46.49499,-23.88889],[-46.4954,-23.88825],[-46.49565,-23.88794],[-46.49605,-23.8876],[-46.49665,-23.88721],[-46.49826,-23.88657],[-46.49982,-23.88644],[-46.50027,-23.88653],[-46.50091,-23.88673],[-46.50165,-23.88695],[-46.50205,-23.88714],[-46.50269,-23.88755],[-46.50313,-23.88791],[-46.50353,-23.8883],[-46.50378,-23.88858],[-46.5042,-23.88917],[-46.50439,-23.88948],[-46.50453,-23.88977],[-46.50475,-23.89031],[-46.50484,-23.89064],[-46.50489,-23.89083],[-46.50496,-23.89118],[-46.50501,-23.89153],[-46.5051,-23.89313],[-46.50512,-23.89349],[-46.50537,-23.89471],[-46.50576,-23.89587],[-46.50604,-23.89641],[-46.50642,-23.89722],[-46.50649,-23.89758],[-46.50654,-23.89802],[-46.50662,-23.89867],[-46.50664,-23.89929],[-46.50651,-23.9001],[-46.50617,-23.9012],[-46.50581,-23.90221],[-46.50558,-23.90278],[-46.50549,-23.90309],[-46.50543,-23.90347],[-46.50541,-23.90369],[-46.50542,-23.90402],[-46.50549,-23.90453],[-46.50555,-23.90474],[-46.50571,-23.90524],[-46.5059,-23.90576],[-46.50619,-23.90638],[-46.50638,-23.90672],[-46.50706,-23.90741],[-46.50829,-23.90816],[-46.50942,-23.90836],[-46.51123,-23.90836],[-46.51247,-23.90832],[-46.51288,-23.90828],[-46.51365,-23.90821],[-46.51389,-23.90821],[-46.51423,-23.90825],[-46.51465,-23.9083],[-46.51525,-23.90838],[-46.51576,-23.90849],[-46.51643,-23.90869],[-46.51685,-23.90888],[-46.51719,-23.90906],[-46.51773,-23.9096],[-46.51798,-23.90994],[-46.51828,-23.91031],[-46.51865,-23.91095],[-46.51891,-23.91153],[-46.51935,-23.91249],[-46.51965,-23.91315],[-46.51998,-23.91381],[-46.52049,-23.91458],[-46.52098,-23.91513],[-46.52133,-23.91548],[-46.52152,-23.91565],[-46.52207,-23.91609],[-46.52289,-23.91668],[-46.52352,-23.91703],[-46.5246,-23.91743],[-46.52543,-23.91758],[-46.52596,-23.91765],[-46.52662,-23.91773],[-46.52755,-23.91788],[-46.52923,-23.91819],[-46.53008,-23.91856],[-46.53058,-23.91883],[-46.53086,-23.91908],[-46.53127,-23.91947],[-46.53177,-23.92013],[-46.53215,-23.92082],[-46.53229,-23.92106],[-46.5326,-23.92158],[-46.5328,-23.92196],[-46.53309,-23.92242],[-46.53345,-23.9229],[-46.53382,-23.92331],[-46.53428,-23.92368],[-46.53494,-23.92402],[-46.53594,-23.92434],[-46.53692,-23.92443],[-46.53731,-23.92445],[-46.53813,-23.92448],[-46.53886,-23.92449],[-46.53961,-23.92452],[-46.54021,-23.92459],[-46.54063,-23.9247],[-46.54084,-23.92477],[-46.54103,-23.92484],[-46.54135,-23.92495],[-46.54173,-23.92512],[-46.54223,-23.92538],[-46.54302,-23.9258],[-46.54542,-23.92709],[-46.54635,-23.92755],[-46.54698,-23.92776],[-46.54815,-23.92797],[-46.54887,-23.92801],[-46.54984,-23.92793],[-46.55049,-23.92778],[-46.55107,-23.92759],[-46.55182,-23.92724],[-46.55243,-23.92685],[-46.5528,-23.92657],[-46.55312,-23.92626],[-46.55341,-23.92594],[-46.55383,-23.92539],[-46.55411,-23.92492],[-46.55433,-23.92446],[-46.55462,-23.92348],[-46.55481,-23.9224],[-46.55504,-23.92114],[-46.55529,-23.91971],[-46.55564,-23.91781],[-46.55592,-23.91651],[-46.5562,-23.91555],[-46.55711,-23.91292],[-46.55785,-23.91078],[-46.55639,-23.91605],[-46.55608,-23.91717],[-46.55581,-23.91856],[-46.55579,-23.9188],[-46.55533,-23.92326],[-46.55502,-23.92456],[-46.55459,-23.92551],[-46.55381,-23.92654],[-46.55267,-23.9275],[-46.55182,-23.92799],[-46.5505,-23.92845],[-46.54939,-23.92861],[-46.54745,-23.92847],[-46.54598,-23.92797],[-46.54183,-23.92599],[-46.54126,-23.92574],[-46.54094,-23.9256],[-46.54002,-23.92533],[-46.53887,-23.92516],[-46.53738,-23.92508],[-46.53514,-23.92482],[-46.53444,-23.92456],[-46.53371,-23.92416],[-46.53241,-23.92294],[-46.53191,-23.92216],[-46.53161,-23.9215],[-46.53075,-23.91925],[-46.53039,-23.91848],[-46.52999,-23.91773],[-46.52941,-23.9167],[-46.52874,-23.91581],[-46.52776,-23.91481],[-46.52407,-23.91152],[-46.51268,-23.90134],[-46.51069,-23.8996],[-46.50869,-23.89785],[-46.50849,-23.8976],[-46.50808,-23.89719],[-46.5077,-23.89663],[-46.50741,-23.89593],[-46.50641,-23.89054],[-46.50579,-23.88791],[-46.50531,-23.88703],[-46.50375,-23.88534],[-46.50275,-23.88472],[-46.50117,-23.88412],[-46.49985,-23.88382],[-46.49485,-23.8834],[-46.48871,-23.88257],[-46.48724,-23.88247],[-46.48597,-23.88261],[-46.48414,-23.88324],[-46.48316,-23.88384],[-46.48209,-23.88478],[-46.4812,-23.88601],[-46.48068,-23.88727],[-46.4805,-23.88821],[-46.48052,-23.88969],[-46.48071,-23.89125],[-46.48068,-23.89238],[-46.48042,-23.89341],[-46.47988,-23.89444],[-46.4792,-23.89525],[-46.4783,-23.89597],[-46.47737,-23.89646],[-46.47524,-23.89734],[-46.4735,-23.89766],[-46.47169,-23.89817],[-46.47096,-23.89855],[-46.46939,-23.89953],[-46.46887,-23.89984],[-46.46857,-23.9],[-46.46651,-23.90101],[-46.46282,-23.90243],[-46.46234,-23.9025],[-46.45949,-23.90256],[-46.45869,-23.90253],[-46.45805,-23.90249],[-46.45769,-23.90247],[-46.4573,-23.90244],[-46.45557,-23.90242],[-46.45418,-23.90248],[-46.45345,-23.9026],[-46.45272,-23.9028],[-46.45131,-23.90343],[-46.45024,-23.90416],[-46.44186,-23.91447],[-46.44021,-23.91655],[-46.43827,-23.91898],[-46.43655,-23.92116],[-46.43624,-23.92169],[-46.4355,-23.92281],[-46.43523,-23.92352],[-46.43522,-23.92471],[-46.43516,-23.92525],[-46.4349,-23.92567],[-46.43444,-23.92595],[-46.43395,-23.92605],[-46.43349,-23.92597],[-46.43205,-23.9255],[-46.42936,-23.9247],[-46.42189,-23.92236],[-46.41833,-23.9212],[-46.41752,-23.92058],[-46.41666,-23.91968],[-46.41599,-23.91945],[-46.41531,-23.91948],[-46.41454,-23.91981],[-46.41447,-23.91983],[-46.41253,-23.92111],[-46.41101,-23.922],[-46.40996,-23.92265],[-46.40464,-23.9263],[-46.40371,-23.92679],[-46.40147,-23.92767],[-46.40015,-23.92801],[-46.3993,-23.92816],[-46.39794,-23.92833],[-46.39536,-23.9283],[-46.39393,-23.92813],[-46.39222,-23.9279],[-46.39142,-23.9278],[-46.38256,-23.9267],[-46.37942,-23.92664],[-46.37634,-23.92699],[-46.3692,-23.92805],[-46.36774,-23.92823],[-46.36261,-23.929],[-46.36142,-23.92917],[-46.35874,-23.92951],[-46.35849,-23.92955],[-46.35471,-23.93005],[-46.35137,-23.93051],[-46.3482,-23.93096],[-46.34725,-23.93076],[-46.34714,-23.93071],[-46.34674,-23.93056],[-46.34665,-23.93047],[-46.34599,-23.92998],[-46.34526,-23.92977],[-46.34362,-23.92948],[-46.34219,-23.92947],[-46.34187,-23.92954],[-46.34047,-23.93023],[-46.33935,-23.93076],[-46.33694,-23.93287],[-46.33552,-23.93421],[-46.3352,-23.93448],[-46.33492,-23.93479],[-46.33473,-23.935],[-46.33429,-23.93542],[-46.33247,-23.93694],[-46.33238,-23.93701],[-46.33231,-23.93704],[-46.33225,-23.93705],[-46.33215,-23.93707],[-46.33204,-23.93706],[-46.33193,-23.93703],[-46.33185,-23.937],[-46.33179,-23.93696],[-46.33172,-23.9369],[-46.33162,-23.93676],[-46.33159,-23.93669],[-46.33158,-23.93661],[-46.33153,-23.9365],[-46.33145,-23.93641],[-46.3314,-23.93639],[-46.33113,-23.93637],[-46.33047,-23.93648],[-46.32981,-23.93661],[-46.32878,-23.93684],[-46.32559,-23.93745],[-46.32463,-23.93684],[-46.32441,-23.93443],[-46.32429,-23.93311],[-46.32349,-23.93245],[-46.32046,-23.93305],[-46.31652,-23.93449],[-46.31626,-23.93458],[-46.31592,-23.93479],[-46.31575,-23.93498],[-46.31558,-23.93525],[-46.31544,-23.93576],[-46.31573,-23.93801],[-46.31578,-23.9382],[-46.31693,-23.94011],[-46.31713,-23.94064],[-46.3172,-23.94096],[-46.31748,-23.94287],[-46.3177,-23.94415],[-46.31765,-23.94613],[-46.31766,-23.94639],[-46.31794,-23.94941],[-46.31797,-23.94993],[-46.31797,-23.95006],[-46.31796,-23.95014],[-46.31782,-23.95037],[-46.31768,-23.95046],[-46.31753,-23.95051],[-46.31548,-23.95079],[-46.31466,-23.95094],[-46.31408,-23.95137],[-46.31358,-23.95166],[-46.31256,-23.95191],[-46.31211,-23.95212],[-46.31179,-23.95234],[-46.31083,-23.95357],[-46.31013,-23.95476],[-46.30962,-23.95587],[-46.30938,-23.95682],[-46.30827,-23.95814],[-46.30811,-23.95833],[-46.30635,-23.96051],[-46.30632,-23.96066],[-46.30641,-23.96087],[-46.3064,-23.96095],[-46.30625,-23.96117],[-46.30614,-23.96126],[-46.30602,-23.96138],[-46.30244,-23.96579],[-46.30217,-23.96613]];
+
+const ATUAL_RET_RAW = [[-46.55826,-23.91047],[-46.55677,-23.91486],[-46.55629,-23.9164],[-46.55602,-23.91746],[-46.55592,-23.91799],[-46.55581,-23.91861],[-46.55562,-23.92025],[-46.55533,-23.92326],[-46.55523,-23.92383],[-46.55502,-23.92456],[-46.55483,-23.92504],[-46.55445,-23.92574],[-46.55407,-23.92624],[-46.55341,-23.92693],[-46.55267,-23.9275],[-46.55222,-23.92779],[-46.55107,-23.92829],[-46.55027,-23.9285],[-46.54876,-23.92862],[-46.54745,-23.92847],[-46.5465,-23.92818],[-46.54515,-23.92758],[-46.54222,-23.92618],[-46.54175,-23.92595],[-46.54114,-23.92568],[-46.54094,-23.9256],[-46.54068,-23.92552],[-46.53982,-23.9253],[-46.53887,-23.92516],[-46.53768,-23.92509],[-46.53618,-23.92497],[-46.53549,-23.92489],[-46.5349,-23.92474],[-46.53448,-23.92459],[-46.53415,-23.92443],[-46.53344,-23.92396],[-46.53271,-23.92329],[-46.53245,-23.92299],[-46.53216,-23.92259],[-46.53191,-23.92216],[-46.53161,-23.9215],[-46.53148,-23.92116],[-46.53116,-23.92031],[-46.53097,-23.91978],[-46.53082,-23.91938],[-46.53074,-23.9192],[-46.53039,-23.91848],[-46.53003,-23.91783],[-46.52987,-23.9175],[-46.52961,-23.91702],[-46.52941,-23.91671],[-46.52898,-23.9161],[-46.52837,-23.91542],[-46.52794,-23.915],[-46.52741,-23.9145],[-46.5267,-23.91387],[-46.52614,-23.91336],[-46.5248,-23.91217],[-46.52309,-23.91064],[-46.52168,-23.90938],[-46.52056,-23.90838],[-46.51985,-23.90775],[-46.51915,-23.90712],[-46.51845,-23.90649],[-46.51704,-23.90523],[-46.5155,-23.90385],[-46.51465,-23.9031],[-46.51409,-23.9026],[-46.51324,-23.90184],[-46.51253,-23.90122],[-46.51211,-23.90084],[-46.51169,-23.90047],[-46.51109,-23.89994],[-46.51055,-23.89947],[-46.50922,-23.89832],[-46.50849,-23.89761],[-46.50837,-23.8975],[-46.50808,-23.89719],[-46.5077,-23.89663],[-46.50748,-23.89611],[-46.50738,-23.89584],[-46.50697,-23.89436],[-46.50671,-23.89331],[-46.50646,-23.89226],[-46.50641,-23.89054],[-46.5062,-23.88921],[-46.50597,-23.88839],[-46.50575,-23.88784],[-46.50541,-23.88719],[-46.50499,-23.88658],[-46.50387,-23.88545],[-46.50356,-23.88521],[-46.50275,-23.88472],[-46.50183,-23.88432],[-46.50068,-23.88402],[-46.50024,-23.8839],[-46.49959,-23.88378],[-46.49862,-23.88363],[-46.49804,-23.88354],[-46.49676,-23.88334],[-46.49464,-23.88337],[-46.49323,-23.88318],[-46.49155,-23.88296],[-46.49006,-23.88276],[-46.48904,-23.88262],[-46.48852,-23.88255],[-46.48796,-23.88249],[-46.48739,-23.88247],[-46.48689,-23.88249],[-46.48656,-23.88252],[-46.48597,-23.88261],[-46.48536,-23.88276],[-46.4848,-23.88295],[-46.48414,-23.88324],[-46.4838,-23.88343],[-46.4834,-23.88367],[-46.48306,-23.88392],[-46.48276,-23.88415],[-46.48226,-23.88461],[-46.48173,-23.8852],[-46.48143,-23.88564],[-46.4812,-23.88601],[-46.48091,-23.88663],[-46.48072,-23.88714],[-46.48061,-23.88755],[-46.48054,-23.88796],[-46.48049,-23.88843],[-46.48049,-23.88924],[-46.48061,-23.89037],[-46.48069,-23.8911],[-46.48072,-23.89163],[-46.4807,-23.89214],[-46.48064,-23.89258],[-46.48055,-23.89302],[-46.48032,-23.89365],[-46.48008,-23.89412],[-46.47974,-23.89463],[-46.47945,-23.89499],[-46.47907,-23.89537],[-46.47873,-23.89566],[-46.47841,-23.89589],[-46.47811,-23.89609],[-46.47773,-23.89629],[-46.47676,-23.89671],[-46.47524,-23.89734],[-46.47351,-23.89766],[-46.47266,-23.89782],[-46.47196,-23.89806],[-46.47136,-23.89833],[-46.47096,-23.89855],[-46.47005,-23.89911],[-46.46944,-23.89949],[-46.46927,-23.8996],[-46.46901,-23.89976],[-46.46873,-23.89992],[-46.46841,-23.9001],[-46.46639,-23.90106],[-46.4661,-23.90118],[-46.46414,-23.902],[-46.46282,-23.90243],[-46.46246,-23.90258],[-46.46209,-23.90278],[-46.46172,-23.90301],[-46.46125,-23.90322],[-46.46086,-23.90329],[-46.46054,-23.90333],[-46.45995,-23.90334],[-46.45959,-23.90331],[-46.45924,-23.90326],[-46.45876,-23.90313],[-46.45843,-23.90302],[-46.4581,-23.90288],[-46.45765,-23.90262],[-46.45732,-23.90242],[-46.45701,-23.90226],[-46.45661,-23.90205],[-46.45558,-23.90161],[-46.45461,-23.90103],[-46.45428,-23.90082],[-46.4535,-23.90031],[-46.45299,-23.89996],[-46.45237,-23.89959],[-46.45175,-23.89933],[-46.45085,-23.899],[-46.45011,-23.89864],[-46.44944,-23.89833],[-46.44915,-23.89824],[-46.44879,-23.89816],[-46.44845,-23.89811],[-46.44806,-23.89807],[-46.44764,-23.89802],[-46.44584,-23.89785],[-46.44427,-23.89769],[-46.44358,-23.89762],[-46.44212,-23.89749],[-46.44138,-23.8975],[-46.44038,-23.89771],[-46.43954,-23.89793],[-46.43865,-23.89815],[-46.43804,-23.89824],[-46.43729,-23.89825],[-46.43679,-23.89818],[-46.43633,-23.89803],[-46.4358,-23.89774],[-46.43544,-23.89745],[-46.43505,-23.897],[-46.43488,-23.89674],[-46.43468,-23.89624],[-46.4346,-23.89584],[-46.4346,-23.89544],[-46.43464,-23.8951],[-46.43477,-23.89467],[-46.4353,-23.8937],[-46.43572,-23.89298],[-46.43583,-23.89258],[-46.43587,-23.89212],[-46.4358,-23.89184],[-46.43572,-23.89162],[-46.43546,-23.89118],[-46.43475,-23.89048],[-46.43412,-23.88983],[-46.43278,-23.88847],[-46.43252,-23.8882],[-46.43234,-23.88802],[-46.43197,-23.88766],[-46.43175,-23.88743],[-46.43157,-23.88725],[-46.43089,-23.88653],[-46.43051,-23.88624],[-46.42982,-23.88587],[-46.42939,-23.88557],[-46.42895,-23.88514],[-46.42868,-23.8848],[-46.4284,-23.88434],[-46.42813,-23.88374],[-46.42736,-23.88201],[-46.42726,-23.88181],[-46.4266,-23.88022],[-46.4262,-23.87933],[-46.42596,-23.87875],[-46.42518,-23.87697],[-46.42447,-23.87546],[-46.42392,-23.87431],[-46.42381,-23.87411],[-46.42326,-23.87326],[-46.42284,-23.87269],[-46.42135,-23.87084],[-46.4202,-23.86944],[-46.41953,-23.86862],[-46.41848,-23.86733],[-46.41783,-23.86651],[-46.41758,-23.86619],[-46.4167,-23.8651],[-46.4147,-23.86262],[-46.41299,-23.86058],[-46.4122,-23.85957],[-46.40985,-23.85666],[-46.40903,-23.85576],[-46.40832,-23.85503],[-46.4071,-23.85395],[-46.40661,-23.85354],[-46.40624,-23.85321],[-46.40617,-23.85314]];
+
+const COPI_3A_RAW = [[-46.4042,-23.85095],[-46.40563,-23.85232],[-46.40861,-23.85296],[-46.41285,-23.85303],[-46.41745,-23.85243],[-46.42107,-23.85191],[-46.42433,-23.85189],[-46.42556,-23.85228],[-46.42741,-23.8523],[-46.42936,-23.85274],[-46.4307,-23.85332],[-46.43173,-23.85477],[-46.43262,-23.85695],[-46.43348,-23.85804],[-46.43532,-23.85989],[-46.43651,-23.86061],[-46.43813,-23.86118],[-46.4395,-23.86231],[-46.44048,-23.86209],[-46.44214,-23.86177],[-46.44339,-23.86108],[-46.44498,-23.8608],[-46.44668,-23.86137],[-46.44919,-23.86247],[-46.45124,-23.86317],[-46.45518,-23.86431],[-46.45669,-23.86499],[-46.4575,-23.86586],[-46.45792,-23.86644],[-46.45824,-23.86756],[-46.45846,-23.86957],[-46.45859,-23.87157],[-46.45868,-23.87401],[-46.45892,-23.87575],[-46.45974,-23.87763],[-46.46067,-23.87795],[-46.46378,-23.87851],[-46.46688,-23.8793],[-46.47011,-23.88019],[-46.47326,-23.88109],[-46.47728,-23.88179],[-46.47969,-23.88218],[-46.48173,-23.88227],[-46.48521,-23.88277],[-46.4871,-23.88243],[-46.49208,-23.88303],[-46.4937,-23.88326],[-46.49469,-23.88339],[-46.49528,-23.88334],[-46.49657,-23.88329],[-46.4984,-23.88357],[-46.50074,-23.88396],[-46.50225,-23.88444],[-46.5039,-23.88553],[-46.50523,-23.88697],[-46.50604,-23.88842],[-46.50639,-23.89044],[-46.50649,-23.89236],[-46.50699,-23.89419],[-46.50726,-23.89578],[-46.50754,-23.8964],[-46.50825,-23.89738],[-46.51869,-23.90662],[-46.52887,-23.91602],[-46.53048,-23.91764],[-46.5315,-23.91873],[-46.53324,-23.91957],[-46.53507,-23.92011],[-46.53886,-23.92092],[-46.54167,-23.9212],[-46.5436,-23.92124],[-46.54571,-23.92109],[-46.54835,-23.92059],[-46.55004,-23.92009],[-46.55164,-23.91953],[-46.55305,-23.91887],[-46.55375,-23.91861],[-46.55459,-23.9181],[-46.5552,-23.91744],[-46.55676,-23.91459],[-46.55743,-23.91271],[-46.55859,-23.90956],[-46.55961,-23.90646],[-46.40192,-23.91182],[-46.4032,-23.91172],[-46.40499,-23.91187],[-46.40634,-23.91224],[-46.40809,-23.91295],[-46.41051,-23.91439],[-46.41147,-23.91511],[-46.41268,-23.9164],[-46.41452,-23.91788],[-46.41595,-23.91897],[-46.41698,-23.92013],[-46.41812,-23.92117],[-46.41978,-23.92179],[-46.42246,-23.92258],[-46.41838,-23.86681],[-46.41849,-23.86518],[-46.41858,-23.86253],[-46.4184,-23.85881],[-46.41852,-23.8558],[-46.4182,-23.85375],[-46.4181,-23.85249],[-46.41805,-23.85234],[-46.41744,-23.85243],[-46.41661,-23.85254],[-46.41624,-23.85259],[-46.41578,-23.85265],[-46.41477,-23.85278],[-46.413,-23.85301],[-46.41165,-23.853],[-46.41039,-23.85299],[-46.40861,-23.85296],[-46.40684,-23.85259],[-46.40563,-23.85232],[-46.40184,-23.85309],[-46.39945,-23.85347],[-46.39839,-23.85379],[-46.39763,-23.8542],[-46.39615,-23.85499],[-46.39533,-23.85606],[-46.39472,-23.85767],[-46.39446,-23.8593],[-46.39481,-23.86026],[-46.39572,-23.86102],[-46.39667,-23.86199],[-46.39805,-23.86311],[-46.39892,-23.86476],[-46.4014,-23.87114],[-46.40203,-23.87271],[-46.40338,-23.87569],[-46.40393,-23.87672],[-46.40412,-23.87752],[-46.40443,-23.87886],[-46.4045,-23.88017],[-46.40425,-23.88159],[-46.4041,-23.88276],[-46.40382,-23.88364],[-46.40356,-23.88449],[-46.403,-23.8853],[-46.40183,-23.8871],[-46.40065,-23.88846],[-46.39973,-23.88948],[-46.39827,-23.89079],[-46.39705,-23.89185],[-46.39609,-23.89295],[-46.39557,-23.89386],[-46.39502,-23.89521],[-46.3951,-23.89687],[-46.39546,-23.89782],[-46.39605,-23.89908],[-46.39647,-23.90027],[-46.39701,-23.90141],[-46.3976,-23.90242],[-46.39798,-23.90365],[-46.39829,-23.90491],[-46.39841,-23.9057],[-46.39855,-23.90682],[-46.39922,-23.90866],[-46.4002,-23.90995],[-46.40161,-23.91142],[-46.4027,-23.91382],[-46.40306,-23.9149],[-46.40243,-23.91674],[-46.40195,-23.91763],[-46.40105,-23.91878],[-46.39979,-23.91996],[-46.39827,-23.92125],[-46.39591,-23.9227],[-46.39373,-23.92358],[-46.37761,-23.92643],[-46.36871,-23.9278]];
+
+// Fix ATUAL: use only west→east portion (toward Santos)
+// Extend 8 points before junction for visual overlap at connection point
+const _wIdx = ATUAL_FWD_RAW.reduce((mi,p,i) => p[0]<ATUAL_FWD_RAW[mi][0]?i:mi, 0);
+const ATUAL_ROUTE = [...ATUAL_FWD_RAW.slice(Math.max(0,_wIdx-8), _wIdx), ...ATUAL_FWD_RAW.slice(_wIdx)];
+// Continuation lane – extend 8 points past junction for overlap
+const ATUAL_RETORNO = [...ATUAL_FWD_RAW.slice(_wIdx, Math.min(ATUAL_FWD_RAW.length,_wIdx+9)), ...ATUAL_FWD_RAW.slice(0, _wIdx).reverse()];
+
+const VIA3A = COPI_3A_RAW.slice(0, 83);
+const COPI_MAIN = COPI_3A_RAW.slice(97);
+const COPI_FULL = [...COPI_3A_RAW.slice(0,83)].reverse().concat(COPI_3A_RAW.slice(97));
+
+// ===== SCENARIOS =====
+const SCENARIOS = [
+  {
+    name:'Cenario 1', sub:'Cenario Atual',
+    desc:'Conego Domênico Rangoni - situacao atual sem obras',
+    themeColor:[0,200,83],
+    // Dados reais: Cônego 50 mil veic/dia, vel 55-65km/h, nível C/D
+    ref:{veicDia:50000,velMedia:60,velPico:45,nivel:'C/D',vc:'0.65',congPct:35},
+    routes:[
+      { pts:ATUAL_ROUTE, label:'Rod. Imigrantes \u2192 Santos', veicDia:3600, velKmh:60, lanes:2, color:[0,200,80], highlight:true },
+      { pts:ATUAL_RETORNO, label:'Rod. Imigrantes (cont.)', veicDia:3600, velKmh:60, lanes:2, color:[0,200,80], highlight:true },
+      { pts:COPI_FULL, label:'COPI (inexistente)', veicDia:0, velKmh:50, lanes:1, color:[0,200,80], highlight:false },
+    ]
+  },
+  {
+    name:'Cenario 2', sub:'3a Pista SEM COPI',
+    desc:'3a pista da Imigrantes sem COPI - colapso na Conego',
+    themeColor:[255,140,0],
+    // Dados reais: 100-130 mil PCE/dia, vel 5-15km/h pico, 20-30 fora, nível F
+    ref:{veicDia:115000,velMedia:25,velPico:10,nivel:'F',vc:'1.50',congPct:85},
+    routes:[
+      { pts:ATUAL_ROUTE, label:'Rod. Imigrantes + 3a Via \u2192 Santos', veicDia:5400, velKmh:18, lanes:3, color:[255,140,0], highlight:true },
+      { pts:ATUAL_RETORNO, label:'Rod. Imigrantes (cont.)', veicDia:5400, velKmh:18, lanes:2, color:[255,140,0], highlight:true },
+      { pts:COPI_FULL, label:'COPI (inexistente)', veicDia:0, velKmh:50, lanes:1, color:[255,140,0], highlight:false },
+    ]
+  },
+  {
+    name:'Cenario 3', sub:'3a Pista COM COPI',
+    desc:'Trafego distribuido - Conego aliviada + COPI ativo',
+    themeColor:[0,140,255],
+    // Dados reais: Cônego 35 mil/dia, vel 70-80km/h, nível A/B + COPI 25 mil/dia
+    ref:{veicDia:60000,velMedia:75,velPico:65,nivel:'A/B',vc:'0.42',congPct:8},
+    routes:[
+      { pts:ATUAL_ROUTE, label:'Rod. Imigrantes \u2192 Santos', veicDia:3600, velKmh:75, lanes:2, color:[0,140,255], highlight:true },
+      { pts:ATUAL_RETORNO, label:'Rod. Imigrantes (cont.)', veicDia:3600, velKmh:75, lanes:2, color:[0,140,255], highlight:true },
+      { pts:COPI_FULL, label:'COPI \u2192 Porto Santos', veicDia:2400, velKmh:75, lanes:1, color:[0,140,255], highlight:true },
+    ]
+  },
+];
+
+// ===== STATE =====
+let currentScenario = 0;
+let activeRoutes = [];
+let allPathData = [];
+let congestionPathData = [];
+let alertIconData = [];
+let stableAlerts = [];
+let laneLineData = [];
+let trafficScale = 1.0;
+let simSpeed = 1.0;
+let roadWidth = 8;
+let playing = false;
+let simStarted = false;
+let carIdCounter = 0;
+let simFadeIn = 0;
+let simTime = 0;
+let TOTAL = 0;
+let completions = 0;
+let avgBaseVel = 55;
+
+// ===== HELPERS =====
+function hav(a,b){
+  const r=6371e3,dl=((b[0]-a[0])*Math.PI)/180,dn=((b[1]-a[1])*Math.PI)/180;
+  const la=(a[1]*Math.PI)/180,lb=(b[1]*Math.PI)/180;
+  const x=Math.sin(dn/2)**2+Math.cos(la)*Math.cos(lb)*Math.sin(dl/2)**2;
+  return r*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
+}
+
+function interpRoute(c,n){
+  const s=[];let T=0;
+  for(let i=0;i<c.length-1;i++){const d=hav(c[i],c[i+1]);s.push({f:c[i],t:c[i+1],d});T+=d}
+  const p=[];
+  for(let i=0;i<=n;i++){
+    const tg=(i/n)*T;let ac=0;
+    for(let j=0;j<s.length;j++){
+      if(ac+s[j].d>=tg){const r=(tg-ac)/s[j].d;
+        p.push([s[j].f[0]+(s[j].t[0]-s[j].f[0])*r,s[j].f[1]+(s[j].t[1]-s[j].f[1])*r]);break}
+      ac+=s[j].d;if(j===s.length-1)p.push(s[j].t);
+    }
+  }
+  return p;
+}
+
+function buildCurvature(sm){
+  const cur=new Float32Array(sm.length);
+  for(let i=0;i<sm.length;i++){
+    if(i===0||i===sm.length-1){cur[i]=1;continue}
+    const a=sm[i-1],b=sm[i],c=sm[i+1];
+    const v1x=b[0]-a[0],v1y=b[1]-a[1],v2x=c[0]-b[0],v2y=c[1]-b[1];
+    const dot=v1x*v2x+v1y*v2y;
+    const m1=Math.sqrt(v1x*v1x+v1y*v1y),m2=Math.sqrt(v2x*v2x+v2y*v2y);
+    cur[i]=0.15+0.85*Math.max(0,(m1&&m2)?dot/(m1*m2):1);
+  }
+  for(let pass=0;pass<15;pass++){
+    const tmp=new Float32Array(cur);
+    for(let i=2;i<sm.length-2;i++) tmp[i]=(cur[i-2]+cur[i-1]+cur[i]+cur[i+1]+cur[i+2])/5;
+    cur.set(tmp);
+  }
+  return cur;
+}
+
+function routeDist(pts){let d=0;for(let i=0;i<pts.length-1;i++)d+=hav(pts[i],pts[i+1]);return d}
+
+function makeSquare(lng,lat,size){
+  return[[lng-size,lat-size*0.7],[lng+size,lat-size*0.7],[lng+size,lat+size*0.7],[lng-size,lat+size*0.7],[lng-size,lat-size*0.7]];
+}
+
+function getCarColor(car){
+  const sf=car.speedScale||1;
+  if(currentScenario===2){
+    // Scenario 3: no red – orange max, predominantly green
+    if(car.gap<0.002*sf) return[255,140,0,235];
+    if(car.gap<0.004*sf) return[255,235,59,235];
+    return[76,175,80,235];
+  }
+  // Red: extremely close
+  if(car.gap<0.003*sf) return[160,20,20,235];
+  // Yellow: approaching
+  if(car.gap<0.006*sf) return[255,235,59,235];
+  // Green: safe distance (default)
+  return[76,175,80,235];
+}
+
+// ===== BUILD SCENARIO =====
+function buildScenario(idx){
+  const sc=SCENARIOS[idx];
+  activeRoutes=[];
+  allPathData=[];
+  congestionPathData=[];
+  alertIconData=[];
+  laneLineData=[];
+
+  sc.routes.forEach((rd,ri)=>{
+    allPathData.push({path:rd.pts,routeIdx:ri,color:rd.color,highlight:rd.highlight!==false,label:rd.label,veicDia:rd.veicDia,velKmh:rd.velKmh,lanes:rd.lanes});
+
+    // Generate lane divider lines between adjacent lanes
+    if(rd.lanes>=2&&rd.highlight!==false){
+      const step=Math.max(1,Math.floor(rd.pts.length/300));
+      const simp=[];
+      for(let i=0;i<rd.pts.length;i+=step) simp.push(rd.pts[i]);
+      if(simp[simp.length-1]!==rd.pts[rd.pts.length-1]) simp.push(rd.pts[rd.pts.length-1]);
+
+      const laneOffs=[];
+      for(let l=0;l<rd.lanes;l++) laneOffs.push(rd.lanes===2?(l===0?-0.00020:0.00020):((l-1)*0.00020));
+
+      for(let l=0;l<rd.lanes-1;l++){
+        const divOff=(laneOffs[l]+laneOffs[l+1])/2;
+        laneLineData.push({path:simp.map(p=>[p[0]+divOff,p[1]+divOff*0.8]),color:rd.color});
+      }
+    }
+
+    const INTERP_N=Math.min(8000,rd.pts.length*80);
+    const smooth=interpRoute(rd.pts,INTERP_N);
+    const curvature=buildCurvature(smooth);
+    const dist=routeDist(rd.pts);
+    const baseSpeed=(rd.velKmh/3.6)/dist;
+
+    const speedProfile=new Float32Array(smooth.length);
+    for(let i=0;i<smooth.length;i++) speedProfile[i]=baseSpeed;
+
+    for(let lane=0;lane<rd.lanes;lane++){
+      const laneOff=rd.lanes===1?0:rd.lanes===2?(lane===0?-0.00020:0.00020):((lane-1)*0.00020);
+      const veicDia=Math.round(rd.veicDia/rd.lanes);
+      const carCount=veicDia>0?Math.max(3,Math.round((veicDia/6)*trafficScale)):0;
+
+      const cars=[];
+      for(let i=0;i<carCount;i++){
+        cars.push({
+          id:++carIdCounter,
+          progress:Math.random(),
+          speedVar:0.85+Math.random()*0.3,
+          laneOffset:laneOff+(Math.random()-0.5)*(rd.lanes===1?0.00012:0.00006),
+          currentSpeed:baseSpeed*(0.5+Math.random()*0.5),
+          prevLng:0,prevLat:0,
+          speedRatio:1.0,gap:1.0,kmh:60,
+        });
+      }
+
+      activeRoutes.push({
+        smooth,curvature,speedProfile,dist,baseSpeed,
+        veicDia,velKmh:rd.velKmh,color:rd.color,label:rd.label,
+        cars,laneIdx:lane,parentIdx:ri,
+      });
+    }
+  });
+
+  TOTAL=activeRoutes.reduce((s,r)=>s+r.cars.length,0);
+  avgBaseVel=sc.ref?sc.ref.velMedia:sc.routes.reduce((s,r)=>s+r.velKmh,0)/sc.routes.length;
+}
+
+// ===== DYNAMIC DENSITY OVERLAY =====
+let densityTimer=0;
+function computeDensityOverlay(){
+  const newCong=[];
+  const newAlerts=[];
+
+  const pulseThresh=currentScenario===2?25:currentScenario===0?10:20;
+
+  const NUM_BINS=50;
+
+  // Group lanes by parent route to combine density
+  const groups={};
+  for(const route of activeRoutes){
+    if(route.cars.length===0) continue;
+    const k=route.parentIdx;
+    if(!groups[k]) groups[k]={smooth:route.smooth,cars:[]};
+    for(const car of route.cars) groups[k].cars.push(car);
+  }
+
+  for(const k in groups){
+    const g=groups[k];
+    const sm=g.smooth;
+    const allCars=g.cars;
+
+    // Only count RED cars (extremely close gap)
+    const bins=new Uint16Array(NUM_BINS);
+    let redCount=0;
+    for(const car of allCars){
+      const sf=car.speedScale||1;
+      if(car.gap<0.003*sf){
+        const b=Math.min(Math.floor(car.progress*NUM_BINS),NUM_BINS-1);
+        bins[b]++;
+        redCount++;
+      }
+    }
+    if(redCount<pulseThresh) continue;
+
+    const thresh=pulseThresh;
+
+    let segStart=-1,peakVal=0,peakBin=-1;
+    for(let b=0;b<=NUM_BINS;b++){
+      const dense=b<NUM_BINS&&bins[b]>=thresh;
+      if(dense&&segStart===-1){segStart=b;peakVal=bins[b];peakBin=b}
+      else if(dense&&bins[b]>peakVal){peakVal=bins[b];peakBin=b}
+      else if(!dense&&segStart!==-1){
+        const si=Math.floor((segStart/NUM_BINS)*(sm.length-1));
+        const ei=Math.min(Math.ceil((b/NUM_BINS)*(sm.length-1)),sm.length-1);
+        const step=Math.max(1,Math.floor((ei-si)/20));
+        const seg=[];
+        for(let k2=si;k2<=ei;k2+=step) seg.push(sm[k2]);
+        if(seg.length>0&&seg[seg.length-1]!==sm[ei]) seg.push(sm[ei]);
+        if(seg.length>=2){
+          const intensity=Math.min(1,peakVal/8);
+          newCong.push({path:seg,intensity:Math.max(0.3,intensity)});
+          const pi=Math.floor(((peakBin+0.5)/NUM_BINS)*(sm.length-1));
+          newAlerts.push({position:sm[Math.min(pi,sm.length-1)]});
+        }
+        segStart=-1;peakVal=0;
+      }
+    }
+  }
+
+  congestionPathData=newCong;
+
+  // Stabilize alerts: merge with existing, keep alive for minimum duration
+  const now=performance.now()/1000;
+  const MERGE_DIST=0.003; // ~300m merge radius
+  const MIN_LIFE=3.0; // minimum seconds an alert stays alive
+
+  // Mark existing stable alerts as not refreshed
+  for(const sa of stableAlerts) sa.refreshed=false;
+
+  for(const na of newAlerts){
+    // Try to match with existing stable alert
+    let matched=false;
+    for(const sa of stableAlerts){
+      const dx=na.position[0]-sa.position[0], dy=na.position[1]-sa.position[1];
+      if(Math.sqrt(dx*dx+dy*dy)<MERGE_DIST){
+        sa.position=na.position; // update position smoothly
+        sa.lastSeen=now;
+        sa.refreshed=true;
+        matched=true;
+        break;
+      }
+    }
+    if(!matched) stableAlerts.push({position:na.position,lastSeen:now,birth:now,refreshed:true});
+  }
+
+  // Remove alerts that haven't been seen for MIN_LIFE seconds
+  stableAlerts=stableAlerts.filter(sa=>sa.refreshed||(now-sa.lastSeen)<MIN_LIFE);
+
+  // Build final alertIconData with fade
+  alertIconData=stableAlerts.map(sa=>{
+    const age=now-sa.lastSeen;
+    const fade=sa.refreshed?1.0:Math.max(0,1.0-age/MIN_LIFE);
+    return{position:sa.position,fade};
+  });
+}
+
+// ===== CAR PHYSICS =====
+function getCarPos(car,route){
+  const sm=route.smooth;
+  const raw=car.progress*(sm.length-1);
+  const idx=Math.min(Math.floor(raw),sm.length-2),t=raw-idx;
+  const lng=sm[idx][0]+(sm[idx+1][0]-sm[idx][0])*t;
+  const lat=sm[idx][1]+(sm[idx+1][1]-sm[idx][1])*t;
+  return{lng:lng+car.laneOffset,lat:lat+car.laneOffset*0.8};
+}
+
+function updateTraffic(dt){
+  for(const route of activeRoutes){
+    route.cars.sort((a,b)=>a.progress-b.progress);
+
+    for(let i=0;i<route.cars.length;i++){
+      const car=route.cars[i];
+      const prevPos=getCarPos(car,route);
+      car.prevLng=prevPos.lng;car.prevLat=prevPos.lat;
+
+      const sIdx=Math.min(Math.floor(car.progress*(route.smooth.length-1)),route.smooth.length-1);
+      const curve=route.curvature[sIdx];
+      let desiredSpeed=route.speedProfile[sIdx]*car.speedVar*curve;
+
+      const aheadIdx=(i+1)%route.cars.length;
+      const ahead=route.cars[aheadIdx];
+      let gap=ahead.progress-car.progress;
+      if(gap<=0) gap+=1.0;
+      car.gap=gap;
+
+      const hardGap=0.0015;
+      const brakeGap=0.008;
+      const speedFactor=Math.max(1,route.velKmh/50);
+      const safeGap=0.012*speedFactor;
+
+      if(gap<hardGap){
+        // Emergency: full stop, don't overlap
+        desiredSpeed=0;
+      } else if(gap<brakeGap){
+        // Hard braking zone
+        const f=(gap-hardGap)/(brakeGap-hardGap);
+        desiredSpeed=Math.min(desiredSpeed,route.baseSpeed*f*0.3);
+      } else if(gap<safeGap){
+        const followFactor=Math.max(0.05,(gap-brakeGap)/(safeGap-brakeGap));
+        desiredSpeed=Math.min(desiredSpeed,route.baseSpeed*followFactor);
+      }
+
+      const accelRate=desiredSpeed>car.currentSpeed?1.2:8.0;
+      car.currentSpeed+=(desiredSpeed-car.currentSpeed)*Math.min(1,accelRate*dt);
+      car.currentSpeed=Math.max(0.0001,car.currentSpeed);
+
+      car.progress+=car.currentSpeed*simSpeed*dt;
+      if(car.progress>=1.0){car.progress-=1.0;completions++;car.prevLng=0;car.prevLat=0;}
+
+      // Hard clamp: never pass through car ahead
+      let gapAfter=ahead.progress-car.progress;
+      if(gapAfter<=0) gapAfter+=1.0;
+      if(gapAfter<hardGap&&gapAfter<0.5){
+        car.progress=ahead.progress-hardGap;
+        if(car.progress<0) car.progress+=1.0;
+        car.currentSpeed=Math.min(car.currentSpeed,ahead.currentSpeed);
+      }
+
+      car.speedRatio=Math.min(1,car.currentSpeed/(route.baseSpeed*car.speedVar));
+      car.kmh=car.currentSpeed*route.dist*3.6;
+      car.gap=gapAfter;
+      car.speedScale=Math.min(1,50/Math.max(50,route.velKmh));
+    }
+  }
+}
+
+// ===== DECK.GL =====
+let curView={longitude:-46.46,latitude:-23.89,zoom:12,pitch:55,bearing:20};
+
+const deckgl=new deck.DeckGL({
+  container:'map',
+  mapStyle:'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  initialViewState:{...curView,minZoom:10,maxZoom:20},
+  controller:true,
+  onViewStateChange:({viewState,interactionState})=>{
+    curView=viewState;
+    syncMinimap();
+    if(typeof syncCompass==='function') syncCompass();
+    if(interactionState&&interactionState.isDragging&&autoRotateDir) stopAutoRotate();
+  },
+  getCursor:({isHovering})=>isHovering?'pointer':'grab',
+});
+
+// ===== MINIMAP =====
+const MINI_ZOOM_OFFSET=4;
+const miniRect=document.getElementById('minimap-rect');
+let minimap=null;
+
+const miniStyles={
+  dark:{version:8,sources:{'carto':{type:'raster',tiles:['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'],tileSize:256,maxzoom:18}},layers:[{id:'bg',type:'raster',source:'carto'}]},
+  street:{version:8,sources:{'carto':{type:'raster',tiles:['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'],tileSize:256,maxzoom:18}},layers:[{id:'bg',type:'raster',source:'carto'}]},
+  satellite:{version:8,sources:{'sat':{type:'raster',tiles:['https://services.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],tileSize:256,maxzoom:19}},layers:[{id:'bg',type:'raster',source:'sat'}]},
+  hybrid:{version:8,sources:{'sat':{type:'raster',tiles:['https://services.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],tileSize:256,maxzoom:19}},layers:[{id:'bg',type:'raster',source:'sat'}]}
+};
+
+setTimeout(()=>{
+  minimap=new maplibregl.Map({
+    container:'minimap',style:miniStyles.dark,
+    center:[curView.longitude,curView.latitude],
+    zoom:curView.zoom-MINI_ZOOM_OFFSET,
+    pitch:0,bearing:0,interactive:false,
+    attributionControl:false,fadeDuration:0,maxTileCacheSize:20,pixelRatio:1,
+  });
+},300);
+
+function syncMinimap(){
+  if(!minimap||!minimap.loaded) return;
+  try{
+    minimap.setCenter([curView.longitude,curView.latitude]);
+    minimap.setZoom(Math.max(0,curView.zoom-MINI_ZOOM_OFFSET));
+    updateMiniRect();
+  }catch(e){}
+}
+
+function updateMiniRect(){
+  if(!minimap) return;
+  const vp=deckgl.getViewports()[0];
+  if(!vp) return;
+  const canvas=document.getElementById('map');
+  const w=canvas.offsetWidth,h=canvas.offsetHeight;
+  const tl=vp.unproject([0,0]),tr=vp.unproject([w,0]),bl=vp.unproject([0,h]),br=vp.unproject([w,h]);
+  try{
+    const pts=[tl,tr,br,bl].map(c=>minimap.project(c));
+    const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y);
+    const minX=Math.max(0,Math.min(...xs)),maxX=Math.min(200,Math.max(...xs));
+    const minY=Math.max(0,Math.min(...ys)),maxY=Math.min(150,Math.max(...ys));
+    miniRect.style.left=minX+'px';miniRect.style.top=minY+'px';
+    miniRect.style.width=Math.max(4,maxX-minX)+'px';miniRect.style.height=Math.max(4,maxY-minY)+'px';
+  }catch(e){}
+}
+
+// ===== ANIMATION LOOP =====
+let lastTs=performance.now();
+const SQ_SIZE=0.00012;
+const TAIL_STEPS=[{d:0.00008,s:0.92,a:85},{d:0.00022,s:0.72,a:55},{d:0.00040,s:0.50,a:30},{d:0.00060,s:0.30,a:14},{d:0.00084,s:0.14,a:4}];
+
+function animate(){
+  const now=performance.now(),dt=(now-lastTs)/1000;
+  lastTs=now;
+
+  if(playing){
+    simTime+=dt*simSpeed;
+    updateTraffic(dt);
+    densityTimer+=dt;
+    if(densityTimer>=0.12){computeDensityOverlay();densityTimer=0}
+    const secs=Math.floor(simTime);
+    const mm=String(30+Math.floor(secs/60)%60).padStart(2,'0');
+    const ss=String(secs%60).padStart(2,'0');
+    document.getElementById('clock').textContent='07:'+mm+':'+ss;
+  }
+
+  // Fade-in after simulation start (routes fast, cars slower)
+  if(simStarted&&simFadeIn<1) simFadeIn=Math.min(1,simFadeIn+dt*0.5);
+  const routeAlpha=simStarted?Math.min(1,simFadeIn*3):0.15;
+  const carAlpha=simStarted?Math.max(0,simFadeIn*1.2-0.2):0;
+
+  const carData=[],tailData=[],glowData=[];
+  for(const route of activeRoutes){
+    for(const car of route.cars){
+      const pos=getCarPos(car,route);
+      const col=getCarColor(car);
+      const a=Math.floor(col[3]*carAlpha);
+      carData.push({polygon:makeSquare(pos.lng,pos.lat,SQ_SIZE),color:[col[0],col[1],col[2],a]});
+
+      if(car.prevLng&&car.prevLat){
+        const dx=pos.lng-car.prevLng,dy=pos.lat-car.prevLat;
+        const len=Math.sqrt(dx*dx+dy*dy);
+        if(len>1e-9){
+          const bx=-dx/len,by=-dy/len;
+          glowData.push({polygon:makeSquare(pos.lng,pos.lat,SQ_SIZE*2.8),color:[col[0],col[1],col[2],Math.floor(25*carAlpha)]});
+          for(const st of TAIL_STEPS){
+            tailData.push({
+              polygon:makeSquare(pos.lng+bx*st.d,pos.lat+by*st.d,SQ_SIZE*st.s),
+              color:[col[0],col[1],col[2],Math.floor(st.a*carAlpha)]
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Pulse animation at congestion hotspots – smooth sine, no flicker
+  const pulseTime=now/1000;
+  const pulseData=[];
+  for(const alert of alertIconData){
+    const fade=alert.fade||1.0;
+    // Smooth breathing: sin wave oscillates 0→1→0, period ~10s
+    const breath=(Math.sin(pulseTime*0.6)*0.5+0.5);
+    const radius=120+breath*380;
+    const alpha=Math.floor((80+breath*120)*fade);
+    pulseData.push({position:alert.position,radius,alpha});
+    // Second ring offset by half cycle
+    const breath2=(Math.sin(pulseTime*0.6+Math.PI)*0.5+0.5);
+    const radius2=120+breath2*380;
+    const alpha2=Math.floor((60+breath2*90)*fade);
+    pulseData.push({position:alert.position,radius:radius2,alpha:alpha2});
+  }
+
+  const layers=[
+    new deck.PathLayer({
+      id:'route-glow',data:allPathData,getPath:d=>d.path,
+      getColor:d=>{const a=d.highlight?90:12;return[d.color[0],d.color[1],d.color[2],Math.floor(a*routeAlpha)]},
+      getWidth:roadWidth*12,widthMinPixels:roadWidth*1.5,capRounded:true,jointRounded:true,
+      pickable:true,autoHighlight:true,highlightColor:[255,255,255,18],
+      onHover:info=>{
+        const tip=document.getElementById('routeTooltip');
+        if(info.object){
+          const d=info.object;
+          const c=d.color;
+          tip.innerHTML='<div class="route-tooltip-name"><span class="route-tooltip-dot" style="background:rgb('+c[0]+','+c[1]+','+c[2]+')"></span>'+d.label+'</div>'
+            +'<div class="route-tooltip-info">'+d.lanes+' via'+(d.lanes>1?'s':'')+' &middot; '+d.velKmh+' km/h &middot; '+d.veicDia+' veic/dia</div>';
+          tip.style.left=(info.x+14)+'px';tip.style.top=(info.y+14)+'px';
+          tip.classList.add('visible');
+        }else{tip.classList.remove('visible')}
+      },
+    }),
+    new deck.PathLayer({
+      id:'route-line',data:allPathData,getPath:d=>d.path,
+      getColor:d=>{const a=d.highlight?180:30;return[d.color[0],d.color[1],d.color[2],Math.floor(a*routeAlpha)]},
+      getWidth:roadWidth,widthMinPixels:Math.max(1,roadWidth*0.4),capRounded:true,jointRounded:true,
+    }),
+    new deck.PathLayer({
+      id:'lane-lines',data:laneLineData,getPath:d=>d.path,
+      getColor:[255,255,255,Math.floor(40*routeAlpha)],getDashArray:[8,12],
+      getWidth:1,widthMinPixels:1,capRounded:false,
+      extensions:[new deck.PathStyleExtension({dash:true})],
+    }),
+    new deck.ScatterplotLayer({
+      id:'congestion-pulse',data:pulseData,
+      getPosition:d=>d.position,getRadius:d=>d.radius,
+      getFillColor:d=>[255,20,20,Math.floor(d.alpha*0.5)],
+      getLineColor:d=>[255,40,40,Math.min(255,Math.floor(d.alpha*1.4))],
+      stroked:true,filled:true,lineWidthMinPixels:2,getLineWidth:3,
+      radiusMinPixels:0,
+    }),
+    new deck.PolygonLayer({id:'car-glow',data:glowData,getPolygon:d=>d.polygon,getFillColor:d=>d.color,stroked:false,filled:true,extruded:false}),
+    new deck.PolygonLayer({id:'tails',data:tailData,getPolygon:d=>d.polygon,getFillColor:d=>d.color,stroked:false,filled:true,extruded:false}),
+    new deck.PolygonLayer({id:'cars',data:carData,getPolygon:d=>d.polygon,getFillColor:d=>d.color,getLineColor:[255,255,255,60],getLineWidth:0.5,lineWidthMinPixels:0.5,filled:true,stroked:true,extruded:false}),
+  ];
+
+  deckgl.setProps({layers});
+  updateStats();
+  requestAnimationFrame(animate);
+}
+
+// ===== INIT SCENARIO & START =====
+buildScenario(0);
+updateRouteList();
+requestAnimationFrame(animate);
+
+// ===== START SIMULATION =====
+document.getElementById('startBtn').addEventListener('click',function(){
+  if(simStarted) return;
+  simStarted=true;
+  simFadeIn=0;
+
+  // Hide overlay
+  document.getElementById('startOverlay').classList.add('hidden');
+
+  // Remove sim-hidden, animate panels in with staggered delays
+  document.body.classList.remove('sim-hidden');
+
+  const anims=[
+    {sel:'.sc-panel',cls:'sim-enter-left',delay:200},
+    {sel:'#ctrlPanel',cls:'sim-enter-right',delay:400},
+    {sel:'.ctrl',cls:'sim-enter-up',delay:300},
+    {sel:'.time-display',cls:'sim-enter-up',delay:350},
+    {sel:'.compass-wrap',cls:'sim-enter-scale',delay:550},
+    {sel:'.nav-ctrl',cls:'sim-enter-scale',delay:500},
+    {sel:'.panel-toggle',cls:'sim-enter-scale',delay:450},
+  ];
+  for(const a of anims){
+    const el=document.querySelector(a.sel);
+    if(!el) continue;
+    el.style.animationDelay=a.delay+'ms';
+    el.classList.add(a.cls);
+  }
+
+  // Start playing after a short beat
+  setTimeout(()=>{
+    playing=true;
+    document.getElementById('btnPlay').innerHTML='&#9646;&#9646; Pausar';
+  },600);
+});
+
+// ===== CONTROLS =====
+document.getElementById('btnPlay').addEventListener('click',function(){
+  if(!simStarted) return;
+  playing=!playing;
+  this.innerHTML=playing?'&#9646;&#9646; Pausar':'&#9654; Play';
+});
+
+function resetSim(){
+  simTime=0;completions=0;
+  congestionPathData=[];alertIconData=[];stableAlerts=[];densityTimer=0;
+  activeRoutes.forEach(r=>r.cars.forEach(c=>{
+    c.progress=Math.random();c.prevLng=0;c.prevLat=0;
+    c.currentSpeed=r.baseSpeed*(0.5+Math.random()*0.5);c.gap=1.0;c.kmh=60;
+  }));
+}
+
+document.getElementById('roadSlider').addEventListener('input',function(){roadWidth=+this.value;document.getElementById('roadVal').textContent=this.value});
+
+function updateSpeedDisplay(){
+  const kmh=Math.round(avgBaseVel*simSpeed);
+  document.getElementById('speedVal').textContent=kmh+' km/h';
+}
+
+document.getElementById('speedSlider2').addEventListener('input',function(){
+  const kmh=+this.value;
+  simSpeed=kmh/avgBaseVel;
+  updateSpeedDisplay();
+});
+
+document.getElementById('carSlider').addEventListener('input',function(){
+  const pct=+this.value;
+  document.getElementById('carVal').textContent=pct+'%';
+  trafficScale=pct/100;
+  activeRoutes.forEach(r=>{
+    const n=r.veicDia>0?Math.max(3,Math.round((r.veicDia/6)*trafficScale)):0;
+    while(r.cars.length<n) r.cars.push({
+      id:++carIdCounter,
+      progress:Math.random(),speedVar:0.85+Math.random()*0.3,
+      laneOffset:r.cars[0]?r.cars[0].laneOffset+(Math.random()-0.5)*0.00008:0,
+      currentSpeed:r.baseSpeed*0.5,prevLng:0,prevLat:0,speedRatio:1.0,gap:1.0,kmh:60,
+    });
+    while(r.cars.length>n) r.cars.pop();
+  });
+  TOTAL=activeRoutes.reduce((s,r)=>s+r.cars.length,0);
+});
+
+// ===== STATS =====
+let statsTimer=performance.now();
+const elTotalDia=document.getElementById('statTotalDia');
+const elTotalHora=document.getElementById('statTotalHora');
+const elVelMedia=document.getElementById('statVelMedia');
+const elVelPico=document.getElementById('statVelPico');
+const elNivel=document.getElementById('statNivel');
+const elVC=document.getElementById('statVC');
+const elCong=document.getElementById('statCong');
+const elCongBar=document.getElementById('congBar');
+
+function updateStats(){
+  const elapsed=(performance.now()-statsTimer)/1000;
+  if(elapsed>=0.5){
+    const sc=SCENARIOS[currentScenario];
+    const ref=sc.ref;
+
+    // Dados reais do relatório
+    elTotalDia.textContent=ref.veicDia.toLocaleString('pt-BR');
+    elTotalHora.textContent=Math.round(ref.veicDia/18).toLocaleString('pt-BR');
+    elVelMedia.textContent=ref.velMedia+' km/h';
+    elVelPico.textContent=ref.velPico+' km/h';
+    elVC.textContent=ref.vc;
+
+    // Nível de serviço com cor
+    elNivel.textContent=ref.nivel;
+    if(ref.nivel==='F') elNivel.className='stat-v red';
+    else if(ref.nivel==='A/B') elNivel.className='stat-v green';
+    else elNivel.className='stat-v';
+    elNivel.style.color=ref.nivel==='F'?'#F44336':ref.nivel==='A/B'?'#4CAF50':'#FF9800';
+
+    // Congestionamento real do relatório
+    const congPct=ref.congPct;
+    elCong.textContent=congPct+'%';
+    elCong.className='stat-v '+(congPct>=50?'red':congPct>=20?'':'green');
+    if(congPct>=20&&congPct<50) elCong.style.color='#FF9800';
+    else elCong.style.color='';
+
+    const barColor=congPct>=50?'#F44336':congPct>=20?'#FF9800':'#4CAF50';
+    elCongBar.style.width=Math.min(100,congPct)+'%';
+    elCongBar.style.background=barColor;
+
+    statsTimer=performance.now();
+  }
+}
+
+// ===== SCENARIO SWITCHING =====
+function switchScenario(idx){
+  if(idx===currentScenario) return;
+  currentScenario=idx;
+  buildScenario(idx);
+  simTime=0;completions=0;
+
+  document.querySelectorAll('.sc-card').forEach(el=>{
+    el.classList.toggle('active',+el.dataset.sc===idx);
+  });
+
+  document.getElementById('speedSlider2').value=Math.round(avgBaseVel);
+  simSpeed=1.0;
+  updateSpeedDisplay();
+
+  updateRouteList();
+}
+
+document.querySelectorAll('.sc-card').forEach(el=>{
+  el.addEventListener('click',function(){switchScenario(+this.dataset.sc)});
+});
+
+function updateRouteList(){
+  const sc=SCENARIOS[currentScenario];
+  const list=document.getElementById('routeList');
+  list.innerHTML='';
+  sc.routes.forEach((rd,i)=>{
+    const li=document.createElement('li');
+    li.className='pista-item';
+    const rgbStr='rgb('+rd.color.join(',')+')';
+    li.innerHTML='<span class="pista-dot" style="background:'+rgbStr+'"></span><span class="pista-name">'+rd.label+'</span>'+(rd.lanes>1?'<span class="pista-lanes">'+rd.lanes+' faixas</span>':'');
+    list.appendChild(li);
+  });
+}
+
+// ===== MAP STYLES =====
+const mapStyles={
+  dark:'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  street:'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
+  satellite:{version:8,sources:{'esri-sat':{type:'raster',tiles:['https://services.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],tileSize:256,maxzoom:19}},layers:[{id:'satellite',type:'raster',source:'esri-sat'}]},
+  hybrid:{version:8,sources:{'esri-sat':{type:'raster',tiles:['https://services.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],tileSize:256,maxzoom:19},'esri-ref':{type:'raster',tiles:['https://services.arcgisonline.com/arcgis/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'],tileSize:256,maxzoom:19},'esri-roads':{type:'raster',tiles:['https://services.arcgisonline.com/arcgis/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'],tileSize:256,maxzoom:19}},layers:[{id:'satellite',type:'raster',source:'esri-sat'},{id:'ref-labels',type:'raster',source:'esri-ref'},{id:'road-labels',type:'raster',source:'esri-roads'}]}
+};
+
+let currentStyle='dark';
+function setMapStyle(key){
+  if(key===currentStyle) return;
+  currentStyle=key;
+  deckgl.setProps({mapStyle:mapStyles[key]});
+  if(minimap) try{minimap.setStyle(miniStyles[key])}catch(e){}
+  document.querySelectorAll('.style-btn').forEach(b=>{
+    b.classList.toggle('active',b.dataset.style===key);
+  });
+}
+document.querySelectorAll('.style-btn').forEach(btn=>{
+  btn.addEventListener('click',function(){setMapStyle(this.dataset.style)});
+});
+
+// ===== NAVIGATION =====
+let autoRotateDir=0,autoRotateRAF=null;
+function stopAutoRotate(){
+  autoRotateDir=0;
+  if(autoRotateRAF){cancelAnimationFrame(autoRotateRAF);autoRotateRAF=null;}
+  document.getElementById('rotLeftBtn').classList.remove('rotating');
+  document.getElementById('rotRightBtn').classList.remove('rotating');
+}
+function toggleAutoRotate(dir){
+  if(autoRotateDir===dir){stopAutoRotate();return;}
+  stopAutoRotate();
+  autoRotateDir=dir;
+  const btnId=dir<0?'rotLeftBtn':'rotRightBtn';
+  document.getElementById(btnId).classList.add('rotating');
+  let last=performance.now();
+  function step(now){
+    if(!autoRotateDir) return;
+    const dt=(now-last)/1000;last=now;
+    curView={...curView,bearing:curView.bearing+autoRotateDir*20*dt};
+    deckgl.setProps({initialViewState:{...curView,minZoom:10,maxZoom:20}});
+    syncCompass();
+    autoRotateRAF=requestAnimationFrame(step);
+  }
+  autoRotateRAF=requestAnimationFrame(step);
+}
+function shortestBearing(from,to){let d=((to-from)%360+540)%360-180;return from+d}
+function syncCompass(){
+  const r='rotate('+(-curView.bearing)+'deg)';
+  const s1=document.getElementById('compassSvg');
+  const s2=document.getElementById('compassSvgBig');
+  if(s1) s1.style.transform=r;
+  if(s2) s2.style.transform=r;
+}
+function toggleCompass(){
+  const el=document.getElementById('compassExpanded');
+  const ov=document.getElementById('compassOverlay');
+  const open=!el.classList.contains('show');
+  el.classList.toggle('show',open);
+  ov.classList.toggle('show',open);
+  if(open) syncCompass();
+}
+function rotateMap(b){
+  stopAutoRotate();
+  const target=shortestBearing(curView.bearing,b);
+  curView={...curView,bearing:target,transitionDuration:500};
+  deckgl.setProps({initialViewState:{...curView,minZoom:10,maxZoom:20}});
+  syncCompass();
+}
+document.getElementById('map').addEventListener('mousedown',function(e){
+  if(autoRotateDir&&!e.target.closest('.nav-ctrl')) stopAutoRotate();
+});
+document.getElementById('map').addEventListener('touchstart',function(e){
+  if(autoRotateDir&&!e.target.closest('.nav-ctrl')) stopAutoRotate();
+});
+function pitchMap(p){
+  curView={...curView,pitch:p,transitionDuration:300};
+  deckgl.setProps({initialViewState:{...curView,minZoom:10,maxZoom:20}});
+}
+function zoomMap(z){
+  curView={...curView,zoom:Math.max(10,Math.min(20,z)),transitionDuration:300};
+  deckgl.setProps({initialViewState:{...curView,minZoom:10,maxZoom:20}});
+}
+
+// ===== COLLAPSIBLE + DRAGGABLE PANEL =====
+document.getElementById('collapseBtn').addEventListener('click',function(){
+  document.getElementById('ctrlPanel').classList.toggle('collapsed');
+});
+(function(){
+  const panel=document.getElementById('ctrlPanel');
+  const handle=document.getElementById('panelDragHandle');
+  let dragging=false,offX=0,offY=0;
+  function isMobile(){return window.innerWidth<=768}
+  handle.addEventListener('mousedown',function(e){
+    if(isMobile()||e.target.closest('.panel-collapse-btn')) return;
+    dragging=true;
+    const r=panel.getBoundingClientRect();
+    offX=e.clientX-r.left;offY=e.clientY-r.top;
+    panel.style.transition='none';e.preventDefault();
+  });
+  document.addEventListener('mousemove',function(e){
+    if(!dragging) return;
+    const x=Math.max(0,Math.min(window.innerWidth-100,e.clientX-offX));
+    const y=Math.max(0,Math.min(window.innerHeight-50,e.clientY-offY));
+    panel.style.left=x+'px';panel.style.top=y+'px';panel.style.right='auto';
+  });
+  document.addEventListener('mouseup',function(){dragging=false});
+})();
+
+// ===== SAVE / LOAD STATE =====
+const STORAGE_KEY='simCubatao_v2';
+function salvarEstado(){
+  const estado={currentScenario,roadWidth,simSpeed,trafficScale,currentStyle,
+    curView:{longitude:curView.longitude,latitude:curView.latitude,zoom:curView.zoom,pitch:curView.pitch,bearing:curView.bearing}};
+  localStorage.setItem(STORAGE_KEY,JSON.stringify(estado));
+  const btn=document.getElementById('btnSave');
+  btn.innerHTML='&#10003; Salvo';btn.classList.add('saved');
+  setTimeout(()=>{btn.innerHTML='&#128190; Salvar';btn.classList.remove('saved')},1500);
+}
+function carregarEstado(){
+  const raw=localStorage.getItem(STORAGE_KEY);
+  if(!raw) return;
+  try{
+    const s=JSON.parse(raw);
+    if(s.currentScenario!=null&&s.currentScenario!==currentScenario){
+      switchScenario(s.currentScenario);
+    }
+    if(s.roadWidth!=null){roadWidth=s.roadWidth;document.getElementById('roadSlider').value=roadWidth;document.getElementById('roadVal').textContent=roadWidth}
+    if(s.simSpeed!=null){
+      simSpeed=Math.min(120/avgBaseVel,Math.max(10/avgBaseVel,s.simSpeed));
+      const kmh=Math.round(avgBaseVel*simSpeed);
+      document.getElementById('speedSlider2').value=kmh;updateSpeedDisplay();
+    }
+    if(s.trafficScale!=null){
+      trafficScale=s.trafficScale;
+      const pct=Math.round(trafficScale*100);
+      document.getElementById('carSlider').value=pct;document.getElementById('carVal').textContent=pct+'%';
+      activeRoutes.forEach(r=>{
+        const n=r.veicDia>0?Math.max(3,Math.round((r.veicDia/6)*trafficScale)):0;
+        while(r.cars.length<n) r.cars.push({id:++carIdCounter,progress:Math.random(),speedVar:0.85+Math.random()*0.3,laneOffset:r.cars[0]?r.cars[0].laneOffset+(Math.random()-0.5)*0.00008:0,currentSpeed:r.baseSpeed*0.5,prevLng:0,prevLat:0,speedRatio:1.0,gap:1.0,kmh:60});
+
+        while(r.cars.length>n) r.cars.pop();
+      });
+      TOTAL=activeRoutes.reduce((sum,r)=>sum+r.cars.length,0);
+    }
+    if(s.currentStyle) setTimeout(()=>setMapStyle(s.currentStyle),500);
+    if(s.curView){
+      deckgl.setProps({initialViewState:{...s.curView,minZoom:10,maxZoom:20,transitionDuration:0}});
+      curView=s.curView;
+    }
+  }catch(e){console.warn('Erro ao carregar estado:',e)}
+}
+carregarEstado();
+syncCompass();
+</script>
+</body>
+</html>

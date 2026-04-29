@@ -1,0 +1,11 @@
+{
+  "name": "simulacao-cubatao-santos",
+  "version": "1.0.0",
+  "description": "Simulação de Tráfego - Cubatão / Porto de Santos",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}
